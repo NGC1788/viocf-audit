@@ -1,0 +1,16 @@
+Title: Checkpoint access for VIOLET reproducibility study
+
+Hello,
+
+We are conducting a non-commercial school R&E study on the controllability
+and real-instrument calibration of neural violin synthesis.
+
+The checkpoint and DACVAE links in the README currently return 401
+Unauthorized in our environment. Could you please enable access or clarify
+the gating procedure and licence?
+
+We will cite the paper and repository, will not redistribute the weights or
+CSV-TD, and only need inference access for controlled evaluation.
+
+Thank you.
+

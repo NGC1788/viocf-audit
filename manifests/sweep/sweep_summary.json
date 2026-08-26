@@ -1,0 +1,35 @@
+{
+  "dense_clips": 6912,
+  "guidance_clips": 4608,
+  "total_clips": 11520,
+  "expanded_prompt_count": 24,
+  "dense_cc1_levels": [
+    8,
+    24,
+    40,
+    56,
+    64,
+    72,
+    88,
+    104,
+    120
+  ],
+  "dense_replicates": 8,
+  "guidance_anchor_prompts": [
+    "long_low_short",
+    "long_high_long",
+    "scale_mid_short",
+    "repeat_high_short",
+    "leap_low_long",
+    "leap_mid_short"
+  ],
+  "guidance_weights": [
+    0.0,
+    0.5,
+    1.0,
+    2.0
+  ],
+  "guidance_replicates": 4,
+  "guidance_pair_manifests": 16,
+  "critical_note": "Run only after the pilot gates and official VIOLET smoke test pass."
+}

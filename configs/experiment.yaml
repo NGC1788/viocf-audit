@@ -1,0 +1,57 @@
+project_name: VioCF-Audit
+sample_rate: 48000
+bit_depth: 24
+clip_seconds: 10.0
+note_onset_seconds: 0.75
+tempo_bpm: 96
+
+techniques:
+  sustain: 36
+  staccato: 40
+  pizzicato: 43
+  legato_slur: 49
+
+dynamics:
+  p: 32
+  mf: 64
+  f: 96
+
+model:
+  base_seed: 20260826
+  replicates: 5
+  w_tech: 1.0
+  w_cc: 1.0
+  sampling_steps: 30
+
+real:
+  performer_id: P1
+  violins: [V1, V2, V3]
+  takes_per_cell: 2
+  microphone_distance_cm: 70
+  microphone_height_offset_cm: 15
+  target_peak_dbfs: -12
+
+analysis:
+  f0_backend: swiftf0
+  f0_confidence_threshold: 0.75
+  baseline_technique: sustain
+  baseline_dynamic: mf
+  active_threshold_db_above_noise: 12
+  min_snr_db: 30
+  clip_threshold: 0.999
+  bootstrap_iterations: 2000
+  random_seed: 20260826
+  response_features:
+    - rms_dbfs
+    - attack_time_s
+    - spectral_centroid_hz
+    - spectral_rolloff_hz
+    - hnr_db
+    - f0_cents_error
+    - onset_time_s
+    - active_duration_s
+  pitch_timing_features:
+    - f0_cents_error
+    - onset_time_s
+    - onset_count
+    - active_duration_s

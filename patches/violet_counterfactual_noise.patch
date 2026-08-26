@@ -1,0 +1,129 @@
+diff --git a/src/inference/render_utils.py b/src/inference/render_utils.py
+index f64ef1cb906b8a0d3a37152782ece840fb6c4187..8987dfba7a1a64c062e106d5509cb47cb1e85d97 100644
+--- a/src/inference/render_utils.py
++++ b/src/inference/render_utils.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import hashlib
+ import math
+ from typing import Any, Dict, Optional, Sequence
+ 
+@@ -39,6 +40,13 @@ def retry_seed(
+     return int(base_seed) + int(sample_index) * int(seed_stride) + int(attempt)
+ 
+ 
++def stable_group_seed(base_seed: int, group_key: str, attempt: int = 0) -> int:
++    """Stable seed for a counterfactual block; unlike hash(), this is process-safe."""
++    payload = f"{int(base_seed)}\0{group_key}\0{int(attempt)}".encode("utf-8")
++    digest = hashlib.blake2b(payload, digest_size=8).digest()
++    return int.from_bytes(digest, "little") & ((1 << 63) - 1)
++
++
+ def _iter_playable_notes(sequence: Any, playable_note_min_pitch: int):
+     for note in sequence.notes:
+         if int(note.pitch) >= int(playable_note_min_pitch):
+diff --git a/src/models/violin_diffusion_module.py b/src/models/violin_diffusion_module.py
+index 6e988a398ddabb4231361bb33ba189e201753f8c..6a000534ee8e294fd134bc9ee688dc925194dc04 100644
+--- a/src/models/violin_diffusion_module.py
++++ b/src/models/violin_diffusion_module.py
+@@ -28,6 +28,7 @@ from src.inference.render_utils import (
+     make_seeded_noise,
+     render_window_diagnostics,
+     retry_seed,
++    stable_group_seed,
+ )
+ 
+ 
+@@ -71,9 +72,14 @@ class ViolinDiffusionModule(LightningModule):
+         cc_frame_rate: float = 25.0, # Default frame rate for CC tokens
+         log_target_audio_paths: Optional[list] = None, # List of substrings to match in audio_path for validation logging
+         save_test_conditioning_debug: bool = False,
++        # Write one JSONL audit record per rendered clip without rendering
++        # the extra unconditional/partially-conditioned debug branches.
++        save_test_render_manifest: bool = False,
+         # If True during trainer.test(), save ``net.midi_harmonic_extractor`` outputs (B, cqt_bins, T)
+         # under ``{logger.save_dir}/test_samples/{stem}_harmonic.pt`` (same ``target_len`` as DiT forward).
+         save_test_harmonic_debug: bool = False,
++        test_noise_group_delimiter: Optional[str] = None,
++        test_max_render_attempts: int = DEFAULT_MAX_RENDER_ATTEMPTS,
+ 
+         # Curriculum Learning
+         stage1_steps: int = 100000,
+@@ -95,7 +101,10 @@ class ViolinDiffusionModule(LightningModule):
+         self.cc_frame_rate = cc_frame_rate
+         self.log_target_audio_paths = log_target_audio_paths or []
+         self.save_test_conditioning_debug = bool(save_test_conditioning_debug)
++        self.save_test_render_manifest = bool(save_test_render_manifest)
+         self.save_test_harmonic_debug = bool(save_test_harmonic_debug)
++        self.test_noise_group_delimiter = test_noise_group_delimiter
++        self.test_max_render_attempts = max(1, int(test_max_render_attempts))
+ 
+         self.optimizer = optimizer
+         self.scheduler = scheduler
+@@ -1526,7 +1535,16 @@ class ViolinDiffusionModule(LightningModule):
+                 else None
+             )
+             sequence = midi_io.midi_file_to_note_sequence(str(midi_path)) if midi_path else None
+-            selected_seed = retry_seed(base_seed, batch_idx * max(B, 1) + i, 0)
++            sample_index = batch_idx * max(B, 1) + i
++            delimiter = self.test_noise_group_delimiter
++            noise_group = filenames[i].split(delimiter, 1)[0] if delimiter else None
++
++            def seed_for_attempt(attempt: int) -> int:
++                if noise_group is None:
++                    return retry_seed(base_seed, sample_index, attempt)
++                return stable_group_seed(base_seed, noise_group, attempt)
++
++            selected_seed = seed_for_attempt(0)
+             selected_attempt = 0
+             selected_diag = None
+ 
+@@ -1541,8 +1559,8 @@ class ViolinDiffusionModule(LightningModule):
+                 best_score = -float("inf")
+                 best_payload = (selected_wav, selected_seed, 0, None)
+ 
+-                for attempt in range(DEFAULT_MAX_RENDER_ATTEMPTS):
+-                    attempt_seed = retry_seed(base_seed, batch_idx * max(B, 1) + i, attempt)
++                for attempt in range(self.test_max_render_attempts):
++                    attempt_seed = seed_for_attempt(attempt)
+                     if attempt == 0:
+                         wav_attempt = selected_wav
+                     else:
+@@ -1571,12 +1589,12 @@ class ViolinDiffusionModule(LightningModule):
+                         selected_attempt = attempt
+                         selected_diag = diag
+                         break
+-                    if attempt + 1 < DEFAULT_MAX_RENDER_ATTEMPTS:
++                    if attempt + 1 < self.test_max_render_attempts:
+                         print(
+                             f"[retry] {filenames[i]}: near-silent render "
+                             f"({diag['peak_rms_db']:.2f} dBFS peak RMS), "
+                             f"rerendering with seed "
+-                            f"{retry_seed(base_seed, batch_idx * max(B, 1) + i, attempt + 1)}"
++                            f"{seed_for_attempt(attempt + 1)}"
+                         )
+                 else:
+                     selected_wav, selected_seed, selected_attempt, selected_diag = best_payload
+@@ -1629,7 +1647,9 @@ class ViolinDiffusionModule(LightningModule):
+             # wav is (1, T)
+             torchaudio.save(save_path, wav.float(), self.audio_sample_rate)
+ 
+-            if not self.save_test_conditioning_debug:
++            if not (
++                self.save_test_conditioning_debug or self.save_test_render_manifest
++            ):
+                 continue
+ 
+             saved_branch_audio = {}
+@@ -1664,7 +1684,10 @@ class ViolinDiffusionModule(LightningModule):
+                 "filename": filenames[i],
+                 "midi_path": midi_path,
+                 "saved_audio": os.path.basename(save_path),
++                "base_seed": int(base_seed),
++                "noise_group": noise_group,
+                 "saved_branch_audio": saved_branch_audio,
++                "debug_branches_enabled": bool(self.save_test_conditioning_debug),
+                 "effective_guidance_mode": generation_info["effective_guidance_mode"],
+                 "active_output_equals_branch": generation_info["active_output_equals_branch"],
+                 "effective_cond_scale": generation_info["cond_scale"],
