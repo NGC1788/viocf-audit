@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -23,20 +24,50 @@ def _unit_id(frame: pd.DataFrame) -> pd.Series:
     return pd.Series(np.where(source.eq("model"), model_id, real_id), index=frame.index)
 
 
+_CONDITION_KEYS = ["prompt_id", "technique", "dynamic_label"]
+
+
 def _real_robust_scales(frame: pd.DataFrame, features: Sequence[str]) -> dict[str, float]:
+    """1 z 단위 = **같은 조건을 다시 연주했을 때 실제로 흔들리는 폭**.
+
+    ⚠ 조건 전체(p~f, 전 주법)를 한 덩어리로 뭉쳐 IQR 을 잡으면 그건 '재현성'이 아니라
+    '조건 간 전체 폭'이다. 그 값은 훨씬 커서, 모델의 이탈이 실제보다 작아 보이게 만든다.
+    이 연구는 "사람이 다시 켰을 때의 흔들림"을 기준으로 삼는다고 선언했으므로
+    (docs/EXPERIMENT_SPEC.md) 분모도 그것이어야 한다.
+
+    조건별 IQR 을 구해 중앙값으로 모은다. 반복이 부족해 조건 내 산포를 못 구하면
+    전체 IQR 로 후퇴하되, 그 특징은 scales 와 함께 기록돼 감사 가능해야 한다.
+    """
     real = frame.loc[frame["source"].eq("real")]
+    keys = [key for key in _CONDITION_KEYS if key in real.columns]
     scales: dict[str, float] = {}
     for feature in features:
-        values = pd.to_numeric(real.get(feature), errors="coerce").dropna().to_numpy(dtype=float)
-        if values.size == 0:
-            values = pd.to_numeric(frame.get(feature), errors="coerce").dropna().to_numpy(dtype=float)
-        if values.size == 0:
-            scales[feature] = 1.0
-            continue
-        q25, q75 = np.quantile(values, [0.25, 0.75])
-        scale = float(q75 - q25)
-        if scale <= EPS:
-            scale = float(np.std(values))
+        scale = math.nan
+        if keys and not real.empty:
+            within: list[float] = []
+            for _, group in real.groupby(keys, dropna=False):
+                values = pd.to_numeric(group.get(feature), errors="coerce").dropna().to_numpy(dtype=float)
+                if values.size >= 2:
+                    q25, q75 = np.quantile(values, [0.25, 0.75])
+                    spread = float(q75 - q25)
+                    if spread <= EPS:
+                        spread = float(np.std(values, ddof=1))
+                    if spread > EPS:
+                        within.append(spread)
+            if within:
+                scale = float(np.median(within))
+        if not np.isfinite(scale) or scale <= EPS:
+            # 후퇴: 조건 내 반복이 없을 때만. 의미가 다르므로 위 값과 섞어 해석하지 말 것.
+            values = pd.to_numeric(real.get(feature), errors="coerce").dropna().to_numpy(dtype=float)
+            if values.size == 0:
+                values = pd.to_numeric(frame.get(feature), errors="coerce").dropna().to_numpy(dtype=float)
+            if values.size == 0:
+                scales[feature] = 1.0
+                continue
+            q25, q75 = np.quantile(values, [0.25, 0.75])
+            scale = float(q75 - q25)
+            if scale <= EPS:
+                scale = float(np.std(values))
         scales[feature] = scale if scale > EPS else 1.0
     return scales
 
@@ -244,6 +275,22 @@ def multivariate_energy_distance(x: np.ndarray, y: np.ndarray) -> float:
     )
 
 
+def _split_half_floor(real: np.ndarray, seed: int, repeats: int = 25) -> float:
+    """실연주를 무작위로 반 갈라 잰 energy distance 의 중앙값 = 유한표본 바닥."""
+    if len(real) < 4:
+        return 0.0
+    rng = np.random.default_rng(seed)
+    values = []
+    for _ in range(repeats):
+        order = rng.permutation(len(real))
+        midpoint = len(real) // 2
+        left, right = real[order[:midpoint]], real[order[midpoint:]]
+        distance = multivariate_energy_distance(left, right)
+        if np.isfinite(distance):
+            values.append(distance)
+    return float(np.median(values)) if values else 0.0
+
+
 def compositionality_gap(interactions: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for key, group in interactions.groupby(["technique", "dynamic_label", "interaction"], dropna=False):
@@ -261,13 +308,10 @@ def compositionality_gap(interactions: pd.DataFrame, features: Sequence[str]) ->
         if not len(x) or not len(y):
             continue
         distance = multivariate_energy_distance(x, y)
-        # Human split-half is a finite-sample noise floor, not a null of exactly zero.
-        midpoint = max(1, len(y) // 2)
-        human_floor = (
-            multivariate_energy_distance(y[:midpoint], y[midpoint:])
-            if len(y[midpoint:])
-            else 0.0
-        )
+        # 유한표본 noise floor: 완벽한 모델이라도 표본이 유한하면 거리가 0이 아니다.
+        # ⚠ 행 순서를 그대로 반으로 가르면 (예: 앞=V1/V2, 뒤=V3) floor 에 악기 차이가
+        # 섞여 들어가 gap 을 과소평가한다. 무작위 분할을 여러 번 해서 중앙값을 쓴다.
+        human_floor = _split_half_floor(y, seed=abs(hash(str(key))) % (2**31))
         records.append(
             {
                 "technique": key[0],
@@ -306,6 +350,50 @@ def monotonicity_summary(frame: pd.DataFrame) -> pd.DataFrame:
                 "minimum_adjacent_gain_db": float(np.min(differences)),
             }
         )
+    return pd.DataFrame(records)
+
+
+def delayed_branch_strict_model_leak(frame: pd.DataFrame) -> pd.DataFrame:
+    """분기 이전 구간의 **모델 단독** 검정. 실연주를 기준선으로 쓰지 않는다.
+
+    왜 따로 두는가: 사람은 "250 ms 뒤부터 f" 를 연주할 수 없다. 목표 세기를 처음부터
+    알고 활을 놓기 때문에 실연주는 분기 전부터 이미 다르다. 그 값을 baseline 으로 쓰면
+    null 이 부풀어 모델 검정이 약해진다.
+
+    모델 쪽은 조건이 훨씬 강하다. 같은 noise group 안에서 초기 latent 가 같고 분기 전
+    CC1 조건이 **완전히 동일**하다(VIOLET 은 CC1 을 보간하지 않고 sample-and-hold 로
+    프레임에 깐다 - src/data/components/midi_processor.py 참조). 따라서 인과적 생성기라면
+    분기 전 오디오가 조건에 관계없이 **정확히 같아야** 한다. 0 이 아니면 미래 조건이
+    과거로 샌 것이다.
+
+    ⚠ 해석 주의: VIOLET 은 full-window diffusion 이라 **구조상 비인과적**이다. 누출이
+    관측되는 것 자체는 결함이 아니라 설계의 귀결이다. 결론은 "물리 법칙 위반"이 아니라
+    "이 모델은 실시간/대화형 제어에 쓸 수 없다" 로 쓴다.
+    """
+    delayed = frame.loc[frame["profile"].eq("delayed") & frame["source"].eq("model")].copy()
+    if delayed.empty:
+        return pd.DataFrame()
+    features = [name for name in ("prebranch_rms_dbfs", "prebranch_centroid_hz") if name in delayed]
+    if not features:
+        return pd.DataFrame()
+    if "noise_group" not in delayed.columns:
+        return pd.DataFrame()
+    records: list[dict[str, Any]] = []
+    for key, group in delayed.groupby(["prompt_id", "technique", "noise_group"], dropna=False):
+        cells = group.groupby("dynamic_label")[features].mean()
+        if len(cells) < 2:
+            continue
+        row: dict[str, Any] = {
+            "prompt_id": key[0], "technique": key[1], "noise_group": key[2],
+            "n_dynamics": len(cells),
+        }
+        for feature in features:
+            values = pd.to_numeric(cells[feature], errors="coerce").dropna().to_numpy(dtype=float)
+            row[f"spread_{feature}"] = float(np.ptp(values)) if values.size >= 2 else math.nan
+        row["prebranch_identical"] = bool(
+            np.nanmax([abs(row.get(f"spread_{f}", math.nan)) for f in features]) < 1e-6
+        )
+        records.append(row)
     return pd.DataFrame(records)
 
 
@@ -378,6 +466,14 @@ def bootstrap_mean_ci(
     clusters = clean[cluster].drop_duplicates().to_numpy()
     if len(clusters) == 0:
         return {"mean": math.nan, "ci_low": math.nan, "ci_high": math.nan}
+    if len(clusters) < 20:
+        # 일반화 단위를 prompt 로 잡았으므로 CI 는 prompt 개수에만 의존한다.
+        # 12개(full)면 percentile 부트스트랩 CI 가 상당히 불안정하고, 2개(pilot)면 의미가 없다.
+        warnings.warn(
+            f"bootstrap cluster '{cluster}' n={len(clusters)} (<20): "
+            "신뢰구간이 불안정하다. 파일럿 수치는 확증용으로 쓰지 말 것.",
+            stacklevel=2,
+        )
     rng = np.random.default_rng(seed)
     estimates = []
     for _ in range(iterations):
@@ -429,6 +525,7 @@ def run_metric_suite(
     )
     monotonicity = monotonicity_summary(data)
     delayed = delayed_branch_metrics(data)
+    delayed_strict = delayed_branch_strict_model_leak(data)
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -440,6 +537,7 @@ def run_metric_suite(
         "composition": output / "compositionality_gap.csv",
         "monotonicity": output / "monotonicity.csv",
         "delayed": output / "delayed_branch.csv",
+        "delayed_strict": output / "delayed_branch_model_only.csv",
         "summary": output / "metrics_summary.json",
     }
     for key, frame in (
@@ -450,6 +548,7 @@ def run_metric_suite(
         ("composition", composition),
         ("monotonicity", monotonicity),
         ("delayed", delayed),
+        ("delayed_strict", delayed_strict),
     ):
         frame.to_csv(paths[key], index=False)
 
@@ -479,6 +578,14 @@ def run_metric_suite(
             .reset_index()
             .to_dict(orient="records")
         )
+    if not delayed_strict.empty:
+        spread_cols = [c for c in delayed_strict.columns if c.startswith("spread_")]
+        headline["delayed_model_only_prebranch"] = {
+            "noise_groups": len(delayed_strict),
+            "identical_groups": int(delayed_strict["prebranch_identical"].sum()),
+            "max_spread": {c: float(delayed_strict[c].max()) for c in spread_cols},
+            "note": "인과적 생성기라면 분기 전 spread 가 0 이어야 한다",
+        }
     paths["summary"].write_text(
         json.dumps(headline, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
     )

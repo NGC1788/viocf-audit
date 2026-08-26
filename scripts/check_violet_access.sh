@@ -1,21 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VIOCF_REPO_API="https://huggingface.co/api/datasets/User-tian/VIOLET"
+# ⚠ VIOLET 원본 README는 체크포인트를 datasets/ 주소로 링크하는데 그건 401이다.
+# 실제 가중치는 models/ 레포에 **공개(게이팅 없음)** 로 올라와 있다. 2026-08-26 확인:
+#   https://huggingface.co/api/datasets/User-tian/VIOLET -> 401
+#   https://huggingface.co/api/models/User-tian/VIOLET   -> 200, gated=False
+#     pretrained_checkpoint/ema_snapshots/ema_prof_99515  (581 MB)
+#     dacvae_ft/weights.pth                               (431 MB)
+VIOCF_REPO_API="https://huggingface.co/api/models/User-tian/VIOLET"
+VIOCF_REPO_ID="User-tian/VIOLET"
 VIOCF_HEADERS=()
 if [[ -n "${HF_TOKEN:-}" ]]; then
   VIOCF_HEADERS=(-H "Authorization: Bearer ${HF_TOKEN}")
 fi
 
-VIOCF_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' "${VIOCF_HEADERS[@]}" "${VIOCF_REPO_API}")"
+VIOCF_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' ${VIOCF_HEADERS[@]+"${VIOCF_HEADERS[@]}"} "${VIOCF_REPO_API}")"
 echo "VIOLET Hugging Face API status: ${VIOCF_STATUS}"
 
 if [[ "${VIOCF_STATUS}" == "200" ]]; then
-  echo "Repository metadata is accessible. Confirm that both EMA and DACVAE files can be downloaded."
+  echo "Repository metadata is accessible (public, ungated)."
+  echo
+  echo "Download with:"
+  echo "  huggingface-cli download ${VIOCF_REPO_ID} --local-dir checkpoints/"
+  echo
+  echo "Then confirm both files exist:"
+  echo "  checkpoints/pretrained_checkpoint/ema_snapshots/ema_prof_99515"
+  echo "  checkpoints/dacvae_ft/weights.pth"
   exit 0
 fi
 
-echo "Access is not available yet. Log into Hugging Face/request access and contact the authors."
+echo "models/ repo is unreachable (status ${VIOCF_STATUS}); this is unexpected as of 2026-08-26."
+echo "Check the network first. Only if the repo itself went private should you contact the authors"
+echo "using docs/VIOLET_ACCESS_REQUEST.txt."
 echo "Do not start the full recording matrix until model inference is smoke-tested."
 exit 2
 

@@ -32,6 +32,9 @@ real:
   target_peak_dbfs: -12
 
 analysis:
+  # voiced 판정과 사전고정 비교값(f0_cents_error_configured)에 쓰인다.
+  # ⚠ 지표가 쓰는 f0_cents_error 는 여기 값이 아니라 yin 으로 낸다 — 이유는
+  #    src/viocf/features.py 의 _pitch_features 주석과 docs/EXPERIMENT_SPEC.md 개정 참조.
   f0_backend: swiftf0
   f0_confidence_threshold: 0.75
   baseline_technique: sustain
@@ -50,8 +53,16 @@ analysis:
     - f0_cents_error
     - onset_time_s
     - active_duration_s
+    # 활바꿈 깊이. 이게 없으면 sustain(데타셰)과 legato_slur 가 구분되지 않는다
+    # (active_duration_s 는 음이 이어지면 포화된다).
+    - env_dip_depth_db
+    - env_dip_rate_hz
+    # 비브라토. yin 기반이며 SwiftF0 로는 비단조적이라 측정 불가.
+    - vibrato_extent_cents
   pitch_timing_features:
     - f0_cents_error
     - onset_time_s
     - onset_count
     - active_duration_s
+    - vibrato_extent_cents
+    - vibrato_rate_hz

@@ -17,14 +17,14 @@
 
 - 서버 preflight JSON
 - VIOLET 저장소와 patch 검증
-- checkpoint/DACVAE 확보 또는 접근 요청 증빙
+- checkpoint/DACVAE 다운로드 완료 (models 레포에 공개, 접근 요청 불필요)
 - V1에서 `long_mid × sustain/pizzicato × p/mf/f × 2회` 12개 녹음
 - 같은 12개 조건의 모델 생성
 - QC와 첫 response plot
 
 Go/No-Go:
 
-- 체크포인트만 막히면 실연주·분석은 계속한다.
+- 서버 접속이 막히면 실연주·분석은 계속한다.
 - patch 적용 또는 same-noise 검증이 실패하면 model 결과를 통계에 넣지 않는다.
 
 ## 8월 29일–9월 4일: 전체 pilot 60개와 첫 킬러 피겨
@@ -66,7 +66,7 @@ Go/No-Go:
 3. V1/V2/V3 실제 녹음
 4. guidance sweep
 
-A5000은 생성 작업에 사용하고, CPU 분석은 생성 완료 파일에 증분 실행한다. 모든 장기 실행은 tmux 로그와 run manifest를 남긴다. GPU를 한 달 쓸 수 있어도 full retraining은 하지 않는다. 현재 병목은 학습량이 아니라 체크포인트 접근과 설계 검증이다.
+A5000은 생성 작업에 사용하고, CPU 분석은 생성 완료 파일에 증분 실행한다. 모든 장기 실행은 tmux 로그와 run manifest를 남긴다. GPU를 한 달 쓸 수 있어도 full retraining은 하지 않는다. 현재 병목은 학습량도 체크포인트 접근도 아니다(둘 다 해소). **서버 접속과 실악기 녹음**이다.
 
 최소 산출물:
 

@@ -5,11 +5,12 @@
 오늘은 전체 녹음을 하지 않는다. 다음 여섯 가지를 끝내면 성공이다.
 
 1. 서버 preflight 저장
-2. VIOLET 체크포인트 접근 요청
+2. VIOLET 체크포인트 **다운로드**(접근 요청 불필요 — 아래 참조)
 3. pilot MIDI 60개와 녹음 manifest 확인
 4. VIOLET 저장소 clone 및 same-noise patch 적용
 5. 체크포인트가 있으면 2개 MIDI smoke inference
 6. V1으로 실연주 약 12~20개 파일을 녹음해 QC/특징 추출
+7. `pytest -q` 로 분석기 검증 34개 통과 확인 (특히 test_analyzer_ground_truth.py)
 
 ## 0~1시간: 서버
 
@@ -31,13 +32,19 @@ cat results/preflight.json
 `ready_for_violet_runtime`이 false여도 정상이다. `scripts/setup_violet_env.sh`가 만드는 별도
 `vendor/VIOLET/.venv-violet` 안에서 CUDA available가 true여야 한다.
 
-## 1~2시간: 접근권한
+## 1~2시간: 체크포인트 내려받기
 
 ```bash
 bash scripts/check_violet_access.sh
+huggingface-cli download User-tian/VIOLET --local-dir checkpoints/
 ```
 
-401이면 `docs/VIOLET_ACCESS_REQUEST.txt` 내용을 GitHub issue 또는 저자 이메일로 보낸다. 답을 기다리면서 아래 작업은 계속한다.
+`200 (public, ungated)` 이 나오면 바로 받으면 된다.
+
+> VIOLET 원본 README 는 체크포인트를 `huggingface.co/datasets/User-tian/VIOLET` 로 링크하는데
+> 그 주소는 401 이다. 실제 가중치는 `huggingface.co/User-tian/VIOLET`(models 레포)에
+> **게이팅 없이 공개**돼 있다. 저자에게 메일 보낼 필요 없다.
+> `docs/VIOLET_ACCESS_REQUEST.txt` 는 레포가 실제로 비공개가 됐을 때만 쓴다.
 
 ## 2~3시간: VIOLET 코드
 
@@ -102,7 +109,7 @@ viocf features --manifest manifests/pilot_real.csv --output results/pilot_real_f
 - staccato/pizzicato의 active duration 또는 decay가 sustain과 구분
 - 파일 처리 오류 0
 
-## 체크포인트가 오늘 확보된 경우
+## 체크포인트를 받은 뒤 (오늘 바로 가능)
 
 ```bash
 bash scripts/setup_violet_env.sh
@@ -148,10 +155,11 @@ GO:
 
 HOLD:
 
-- 체크포인트만 기다리는 상태. 실악기 pilot과 분석 코드는 계속 진행
+- 서버 접속이 안 되는 상태. 실악기 pilot 과 분석 코드는 계속 진행
+  (체크포인트 대기는 더 이상 HOLD 사유가 아니다 — 공개 확인됨)
 
 NO-GO/주제 조정:
 
-- 4일 내 VIOLET inference 자산을 받지 못함
+- 4일 내 VIOLET inference 를 한 번도 돌리지 못함 (자산은 이미 공개이므로 이건 환경 문제다)
 - same-noise를 재현할 수 없음
 - 주법 지시를 현재 연주 수준으로 반복할 수 없음

@@ -22,12 +22,25 @@
 ## 지금 반드시 알아야 할 상태
 
 - 기준 VIOLET commit: `cf0975a752a7ee3cc6e11bb573f9e47c64a0ef97`
-- 2026-08-26 현재 공식 Hugging Face 체크포인트는 환경에 따라 `401 Unauthorized`를 반환한다.
+- **체크포인트는 공개돼 있다.** VIOLET 원본 README 가 체크포인트를 `datasets/` 주소로
+  링크하는데 그건 401 이라 막힌 것처럼 보인다. 실제 가중치는 `models/` 레포에 게이팅 없이 있다.
+  (2026-08-26 확인: `api/datasets/User-tian/VIOLET` → 401 / `api/models/User-tian/VIOLET` → 200, gated=False)
+  ```bash
+  huggingface-cli download User-tian/VIOLET --local-dir checkpoints/
+  #  pretrained_checkpoint/ema_snapshots/ema_prof_99515   581 MB
+  #  dacvae_ft/weights.pth                                431 MB
+  ```
+  → 저자에게 접근 요청 메일을 보낼 필요가 없다. `docs/VIOLET_ACCESS_REQUEST.txt` 는
+  레포가 실제로 비공개로 바뀌었을 때만 쓴다.
 - 체크포인트와 DACVAE를 실제로 내려받기 전에는 VIOLET 실험을 성공했다고 간주하지 않는다.
 - 공식 inference 설정의 기본값은 `sampler_w_cc: 0.0`이다. 이 저장소의 실행 스크립트는 반드시 `w_cc=1`, `w_tech=1`로 덮어쓴다.
 - 원본은 파일 순서로 seed를 만들고 조건별 무음 재시도를 한다. `patches/violet_counterfactual_noise.patch`가 이를 same-noise block으로 고친다.
 - 2026-08-12 공개된 counterfactual text-to-music 평가가 이미 shared-seed 설계를 사용한다. 따라서 새로움은 shared seed 자체가 아니라 **실악기 효과 기준선 + local continuous control + leakage/interaction/temporal audit + 재보정**의 결합에 둔다.
-- 논문 분석의 F0 backend는 SwiftF0 0.1.2로 고정한다. 각 feature 행에 실제 backend가 기록되며 pYIN fallback 결과와 섞지 않는다.
+- **F0 backend 는 역할이 나뉜다.** SwiftF0 0.1.2 는 voiced 판정과 사전고정 비교값
+  (`f0_cents_error_configured`)에 쓰고, 지표가 사용하는 `f0_cents_error`·비브라토는
+  yin(연속값)으로 낸다. SwiftF0 는 **같은 음 안에서의 음정 차이를 측정하지 못하기 때문이다**
+  (10 cents 이동을 0.0 으로 읽는다). 근거와 실측표는 `docs/EXPERIMENT_SPEC.md` 개정 1.
+  각 feature 행에 backend 가 기록되며 서로 다른 backend 값을 같은 열에 섞지 않는다.
 
 ## 빠른 시작
 
