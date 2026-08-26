@@ -36,6 +36,34 @@ class ExperimentConfig:
     def dynamics(self) -> dict[str, int]:
         return {str(k): int(v) for k, v in self.raw["dynamics"].items()}
 
+    @property
+    def real_techniques(self) -> dict[str, int]:
+        """사람이 실제로 녹음할 주법만. 모델은 더 많은 주법을 감사받는다.
+
+        모델 축과 실연주 축을 분리하지 않으면, 주법을 하나 늘릴 때마다
+        연주자가 켜야 할 테이크가 216개씩(12프롬프트x3강약x3악기x2회) 늘어난다.
+        아마추어가 반복 가능한 4개만 녹음하고, 나머지 주법은
+        **모델 vs 가상악기** 비교로만 감사한다(실악기 기준선이 없는 축).
+        """
+        requested = self.raw.get("real", {}).get("techniques")
+        if not requested:
+            return self.techniques
+        allowed = self.techniques
+        missing = [str(name) for name in requested if str(name) not in allowed]
+        if missing:
+            raise ValueError(f"real.techniques 에 techniques 에 없는 주법: {missing}")
+        return {str(name): allowed[str(name)] for name in requested}
+
+    @property
+    def full_violin_prompts(self) -> int:
+        """앞에서 몇 개의 프롬프트를 바이올린 3대 전부로 녹음할 것인가.
+
+        나머지 프롬프트는 V1 한 대로만 녹음한다. 반복 2회는 어느 쪽이든 유지한다
+        (HCEL 의 기준선이라 절대 줄일 수 없다). 이렇게 하면 프롬프트 수를 늘려
+        prompt 단위 부트스트랩 클러스터를 확보하면서도 녹음 시간이 폭발하지 않는다.
+        """
+        return int(self.raw.get("real", {}).get("full_violin_prompts", 10**9))
+
 
 def load_config(path: str | Path) -> ExperimentConfig:
     source = Path(path).expanduser().resolve()

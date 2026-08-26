@@ -1,0 +1,11 @@
+{
+  "profile": "expanded",
+  "prompt_count": 24,
+  "model_clips": 18432,
+  "real_takes": 1152,
+  "delayed_model_clips": 192,
+  "delayed_real_takes": 72,
+  "midi_files": 19206,
+  "invalid_midi": [],
+  "critical_note": "Do not record the full design until the pilot and VIOLET smoke test pass."
+}

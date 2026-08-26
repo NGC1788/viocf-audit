@@ -5,11 +5,17 @@ clip_seconds: 10.0
 note_onset_seconds: 0.75
 tempo_bpm: 96
 
+# 모델이 감사받는 주법. keyswitch 번호는 VIOLET configs/ks_config.yaml 원본과 대조 확인함.
+# 앞 4개는 실연주 기준선이 있고(real.techniques), 뒤 4개는 모델 vs 가상악기 비교로만 감사한다.
 techniques:
   sustain: 36
   staccato: 40
   pizzicato: 43
   legato_slur: 49
+  spiccato: 41
+  tremolo: 37
+  trill_major: 38
+  harmonic: 44
 
 dynamics:
   p: 32
@@ -18,14 +24,25 @@ dynamics:
 
 model:
   base_seed: 20260826
-  replicates: 5
+  # 초기 노이즈(시드) 개수. 모델 쪽 표준오차가 1/sqrt(n) 로 줄어들기 때문에
+  # 5 -> 32 로 올리면 검출 가능한 최소 누출이 약 2.5배 작아진다.
+  # "시드 하나 잘못 걸린 것 아니냐"는 반박도 함께 막힌다. GPU 시간이 남는다면
+  # 스윕 축을 넓히는 것보다 여기가 먼저다.
+  replicates: 32
   w_tech: 1.0
   w_cc: 1.0
   sampling_steps: 30
 
 real:
   performer_id: P1
+  # 사람이 실제로 녹음할 주법. 아마추어가 반복 가능한 것만 남긴다.
+  # 여기에 주법을 하나 추가할 때마다 테이크가 수백 개씩 늘어난다는 걸 기억할 것.
+  techniques: [sustain, staccato, pizzicato, legato_slur]
   violins: [V1, V2, V3]
+  # 앞 N개 프롬프트만 바이올린 3대 전부로 녹음하고, 나머지는 V1 한 대로만 녹음한다.
+  # 프롬프트 수를 늘려 prompt 단위 부트스트랩 클러스터를 확보하면서도(12 -> 24)
+  # 녹음 시간이 3배로 뛰지 않게 하는 장치다. 반복 2회는 양쪽 모두 유지한다.
+  full_violin_prompts: 12
   takes_per_cell: 2
   microphone_distance_cm: 70
   microphone_height_offset_cm: 15

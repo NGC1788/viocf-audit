@@ -39,23 +39,42 @@ def _make_config(root: Path) -> Path:
 
 
 def test_default_sweep_counts() -> None:
+    """주법 4개 기준 기본 설계 (하위호환 확인)."""
     assert planned_sweep_counts() == {
         "dense_clips": 6912,
         "guidance_clips": 4608,
-        "total_clips": 11520,
+        "steps_clips": 3456,
+        "total_clips": 14976,
     }
+
+
+def test_sweep_counts_track_the_configured_technique_count() -> None:
+    """주법을 8개로 늘리면 계획 수치도 따라와야 한다.
+
+    회귀 방지: 이 값이 하드코딩돼 있으면 계획서와 실제 생성량이 2배 어긋나고,
+    디스크·시간 추정이 전부 틀어진다.
+    """
+    four = planned_sweep_counts(technique_count=4)
+    eight = planned_sweep_counts(technique_count=8)
+    assert eight["dense_clips"] == four["dense_clips"] * 2
+    assert eight["guidance_clips"] == four["guidance_clips"] * 2
+    assert eight["steps_clips"] == four["steps_clips"] * 2
 
 
 def test_small_sweep_writes_paired_manifests_and_valid_midi(tmp_path: Path) -> None:
     config = load_config(_make_config(tmp_path))
-    outputs = create_compute_sweep(config, dense_replicates=1, guidance_replicates=1)
+    outputs = create_compute_sweep(
+        config, dense_replicates=1, guidance_replicates=1, steps_replicates=1
+    )
     dense = pd.read_csv(outputs["dense"])
     guidance = pd.read_csv(outputs["guidance_all"])
+    steps = pd.read_csv(outputs["steps_all"])
     summary = json.loads(outputs["summary"].read_text(encoding="utf-8"))
 
     assert len(dense) == 24 * 9 * 4
     assert len(guidance) == 6 * 4 * 3 * 16
-    assert summary["total_clips"] == len(dense) + len(guidance)
+    assert len(steps) == 6 * 4 * 3 * 6
+    assert summary["total_clips"] == len(dense) + len(guidance) + len(steps)
     assert summary["guidance_pair_manifests"] == 16
     assert dense["clip_id"].is_unique
     assert guidance["clip_id"].is_unique
@@ -68,7 +87,19 @@ def test_small_sweep_writes_paired_manifests_and_valid_midi(tmp_path: Path) -> N
     pair_paths = [path for key, path in outputs.items() if key.startswith("guidance_wt")]
     assert len(pair_paths) == 16
     assert all(len(pd.read_csv(path)) == 72 for path in pair_paths)
-    for frame in (dense, guidance):
+
+    # 스텝 스윕: 레벨마다 manifest 가 하나씩, 각 manifest 안의 스텝 수는 단일값이어야 한다.
+    # 한 run 안에 설정이 섞이면 manifest 만으로 감사할 수 없다.
+    step_paths = [path for key, path in outputs.items() if key.startswith("steps_n")]
+    assert len(step_paths) == 6
+    for path in step_paths:
+        level = pd.read_csv(path)
+        assert level["sampling_steps"].nunique() == 1
+        assert len(level) == 6 * 4 * 3
+    assert steps["clip_id"].is_unique
+    assert steps.groupby("noise_group")["seed"].nunique().max() == 1
+
+    for frame in (dense, guidance, steps):
         midi_path = tmp_path / str(frame.iloc[0]["midi_path"])
         assert inspect_violet_midi(midi_path)["valid"] is True
 

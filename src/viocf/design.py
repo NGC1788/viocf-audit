@@ -27,16 +27,45 @@ class Prompt:
 REGISTER_ROOTS = {"low": 55, "mid": 67, "high": 79}
 
 
+# 프롬프트 패턴.
+#
+# core(앞 4개)는 기존 설계 그대로 두어 파일럿·기존 manifest 와 호환된다.
+# extra(뒤 4개)는 두 가지를 노리고 추가했다.
+#   1) prompt 단위 부트스트랩 클러스터 확보. 일반화 단위를 prompt 로 선언해 놓고
+#      12개만 쓰면 신뢰구간이 불안정하다(metrics.py 가 20개 미만이면 경고한다).
+#   2) **단일음 프롬프트를 2배로.** 음정 특징은 single_pitch 프롬프트에서만 나오는데
+#      core 에서는 long/repeat 뿐이라 12개 중 6개만 음정 누출 분석에 쓸 수 있었다.
+#      long_short/repeat_slow 를 더해 24개 중 12개가 되고, headline 지표 하나인
+#      음정 누출의 표본이 그대로 2배가 된다.
+CORE_PATTERNS = ("long", "scale", "repeat", "leap")
+EXTRA_PATTERNS = ("long_short", "descend", "arpeggio", "repeat_slow")
+SINGLE_PITCH_PATTERNS = frozenset({"long", "repeat", "long_short", "repeat_slow"})
+
+
 def _pattern_notes(pattern: str, root: int, onset: float, tempo_bpm: int) -> tuple[NoteEvent, ...]:
     beat = 60.0 / tempo_bpm
     if pattern == "long":
         return (NoteEvent(root + 2, onset, 3.5),)
+    if pattern == "long_short":
+        # 길이 축: 같은 음을 짧게. 지속음의 제어 반응이 길이에 의존하는지 본다.
+        return (NoteEvent(root + 2, onset, 1.5),)
     if pattern == "scale":
         pitches = [root, root + 2, root + 4, root + 5, root + 7, root + 5, root + 4, root + 2]
+    elif pattern == "descend":
+        pitches = [root + 12, root + 11, root + 9, root + 7, root + 5, root + 4, root + 2, root]
+    elif pattern == "arpeggio":
+        pitches = [root, root + 4, root + 7, root + 12, root + 7, root + 4, root, root + 4]
     elif pattern == "repeat":
         pitches = [root + 7] * 8
     elif pattern == "leap":
         pitches = [root, root + 7, root + 2, root + 9, root + 4, root + 11, root + 7, root]
+    elif pattern == "repeat_slow":
+        # 음당 2배 길이의 동음 반복. 아티큘레이션이 드러날 시간이 넉넉해
+        # staccato/legato 구분이 가장 또렷하게 나오는 조건이다.
+        pitches = [root + 7] * 4
+        ioi = 1.5 * beat
+        duration = 1.36 * beat
+        return tuple(NoteEvent(pitch, onset + i * ioi, duration) for i, pitch in enumerate(pitches))
     else:
         raise ValueError(f"Unknown pattern: {pattern}")
     ioi = 0.75 * beat
@@ -45,7 +74,10 @@ def _pattern_notes(pattern: str, root: int, onset: float, tempo_bpm: int) -> tup
 
 
 def build_prompts(config: ExperimentConfig, profile: str) -> list[Prompt]:
-    patterns = ("long", "scale", "repeat", "leap")
+    if profile == "expanded":
+        patterns = CORE_PATTERNS + EXTRA_PATTERNS
+    else:
+        patterns = CORE_PATTERNS
     registers = ("low", "mid", "high")
     prompts = []
     for pattern in patterns:
@@ -143,6 +175,7 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
     root = project_root_from_config(config)
     prompts = build_prompts(config, profile)
     techniques = config.techniques
+    real_techniques = config.real_techniques
     dynamics = config.dynamics
     base_seed = int(config.raw["model"]["base_seed"])
     configured_replicates = int(config.raw["model"]["replicates"])
@@ -157,8 +190,13 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
 
     model_rows: list[dict[str, object]] = []
     real_rows: list[dict[str, object]] = []
-    for prompt in prompts:
+    # 프롬프트를 순서대로 두 층으로 나눈다. 앞쪽은 바이올린 3대 전부, 뒤쪽은 V1 한 대만.
+    # 반복 2회는 어느 층에서도 유지한다 — HCEL 의 기준선이라 줄일 수 없다.
+    full_violin_cut = config.full_violin_prompts
+    for prompt_index, prompt in enumerate(prompts):
+        prompt_violins = violins if prompt_index < full_violin_cut else violins[:1]
         for technique, keyswitch in techniques.items():
+            record_this_technique = technique in real_techniques
             for dynamic_label, cc1 in dynamics.items():
                 reference_path = _write_reference_midi(
                     root,
@@ -213,7 +251,9 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                             "status": "planned",
                         }
                     )
-                for violin_id in violins:
+                if not record_this_technique:
+                    continue
+                for violin_id in prompt_violins:
                     for take in range(1, takes + 1):
                         clip_id = _real_clip_id(
                             prompt.prompt_id, technique, dynamic_label, violin_id, take

@@ -52,6 +52,10 @@ bash scripts/bootstrap_analysis.sh
 
 이 명령은 분석용 가상환경과 SwiftF0를 설치하고, pilot MIDI/manifest를 생성하고, MIDI의 keyswitch와 CC1을 검사한다.
 
+전체 설계 규모(`--profile expanded`): 모델 48,576 클립 · 실연주 1,224 테이크 ·
+저장 약 150 GB. 추론은 클립당 2초 기준 약 2.4일이라 A5000 한 달의 극히 일부만 쓴다
+(설계 근거는 `docs/EXPERIMENT_SPEC.md` 개정 5).
+
 생성되는 pilot 규모:
 
 - 일반 factorial: 모델 48개, 실연주 48개
