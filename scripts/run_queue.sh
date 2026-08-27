@@ -58,6 +58,7 @@ T1	chunked	${VIOCF_QUEUE_PROFILE}	본체: 코어 factorial + delayed (프롬프�
 T2	sweep	dense	CC1 응답곡선
 T3	sweep	guidance	guidance 4x4 격자 (16잡)
 T4	sweep	steps	확산 스텝 6단계 (6잡)
+T4b	collect	sweep	스윕 오디오 수집 (생성 -> data/model_audio)
 T5	embed	${VIOCF_QUEUE_PROFILE}	MERT 임베딩 추출 (GPU)
 T5	embed	sweep	MERT 임베딩 추출 — 스윕 (GPU)
 T6	analyze	${VIOCF_QUEUE_PROFILE}	특징 추출 -> 지표 -> 그림 (CPU)
@@ -136,6 +137,12 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
       ;;
     sweep)
       VIOCF_SWEEP_PHASE="${VIOCF_ARG}" bash "${VIOCF_ROOT}/scripts/run_compute_sweep.sh" \
+        || VIOCF_STAGE_OK=false
+      ;;
+    collect)
+      # 생성만 하고 수집을 안 하면 오디오가 logs/violet 안에 남아
+      # 뒤 단계가 전부 빈 결과를 낸다. 큐에 명시적 단계로 넣는다.
+      bash "${VIOCF_ROOT}/scripts/collect_compute_sweep.sh" \
         || VIOCF_STAGE_OK=false
       ;;
     embed)

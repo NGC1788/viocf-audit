@@ -125,6 +125,20 @@ while IFS=$'\t' read -r VIOCF_KEY VIOCF_MIDI_DIR VIOCF_COUNT; do
   bash "${VIOCF_ROOT}/scripts/verify_violet_run.sh" \
     "${VIOCF_JOB_RUN_DIR}" "${VIOCF_MIDI_DIR}"
 
+  # ⚠ 수집까지 해야 파이프라인이 이어진다.
+  # VIOLET 은 오디오를 logs/violet/<...>/test_samples 에 쓴다. collect-violet 이
+  # 그걸 manifest 의 audio_path(data/model_audio/)로 옮기고 pairing_pass 를 판정한다.
+  # 이 단계를 빼먹으면 뒤의 특징추출·임베딩·지표가 전부 "파일 없음"으로 조용히
+  # 빈 결과를 낸다(실제로 겪음: T5 가 50초 만에 '완료', T6 는 빈 CSV 로 실패).
+  VIOCF_MANIFEST="${VIOCF_ROOT}/manifests/${VIOCF_PROFILE}_model.csv"
+  if [[ "${VIOCF_KEY}" == *__delayed ]]; then
+    VIOCF_MANIFEST="${VIOCF_ROOT}/manifests/${VIOCF_PROFILE}_delayed_model.csv"
+  fi
+  "${VIOCF_ROOT}/.venv/bin/viocf" collect-violet \
+    --run-dir "${VIOCF_JOB_RUN_DIR}" \
+    --manifest "${VIOCF_MANIFEST}" \
+    --output "${VIOCF_ROOT}/results/collect_${VIOCF_PROFILE}_${VIOCF_KEY}.csv"
+
   VIOCF_ELAPSED=$(( $(date +%s) - VIOCF_STARTED ))
   printf '%s\tdone\t%s\t%ss\t%s clips\n' \
     "${VIOCF_KEY}" "$(date '+%F %T')" "${VIOCF_ELAPSED}" "${VIOCF_COUNT}" \
