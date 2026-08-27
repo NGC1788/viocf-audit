@@ -220,6 +220,40 @@ def command_train_surrogate(args: argparse.Namespace) -> None:
     _json_print({key: str(value) for key, value in outputs.items()})
 
 
+def command_embed(args: argparse.Namespace) -> None:
+    from .embeddings import embed_manifest
+
+    config = load_config(args.config)
+    frame = embed_manifest(
+        args.manifest,
+        args.output,
+        project_root_from_config(config),
+        model_id=args.model_id,
+        layers=tuple(args.layers),
+        device=args.device,
+        limit=args.limit,
+    )
+    _json_print({"rows_written": len(frame), "output": str(args.output)})
+
+
+def command_embed_metrics(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from .embeddings import embedding_contrast_c2st, summarise
+
+    frames = [pd.read_csv(path) for path in args.embeddings]
+    data = pd.concat(frames, ignore_index=True, sort=False)
+    result = embedding_contrast_c2st(data)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(output, index=False)
+    summary = summarise([result])
+    output.with_suffix(".summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _json_print(summary)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="viocf",
@@ -248,6 +282,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also sweep techniques without a real-instrument baseline",
     )
     sweep.set_defaults(func=command_make_sweep)
+
+    embed = subparsers.add_parser(
+        "embed", help="Extract MERT embeddings for a manifest (GPU)"
+    )
+    embed.add_argument("--manifest", required=True)
+    embed.add_argument("--output", required=True)
+    embed.add_argument("--model-id", default="m-a-p/MERT-v1-95M")
+    embed.add_argument("--layers", type=int, nargs="+", default=[3, 4, 5, 6])
+    embed.add_argument("--device", default=None)
+    embed.add_argument("--limit", type=int, default=None)
+    embed.set_defaults(func=command_embed)
+
+    embed_metrics = subparsers.add_parser(
+        "embed-metrics",
+        help="Classifier two-sample test on MERT contrast vectors",
+    )
+    embed_metrics.add_argument("--embeddings", nargs="+", required=True)
+    embed_metrics.add_argument("--output", required=True)
+    embed_metrics.set_defaults(func=command_embed_metrics)
 
     smoke = subparsers.add_parser("make-smoke", help="Create a two-clip same-noise smoke test")
     smoke.set_defaults(func=command_make_smoke)

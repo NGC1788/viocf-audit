@@ -189,3 +189,33 @@ def test_hierarchical_bootstrap_is_wider_than_naive_cluster_bootstrap() -> None:
         naive.append(float(np.mean(np.concatenate([by[keys[i]] for i in picks]))))
     naive_width = float(np.quantile(naive, 0.975) - np.quantile(naive, 0.025))
     assert (out["ci_high"] - out["ci_low"]) > naive_width
+
+
+def test_c2st_detects_difference_and_accepts_identical() -> None:
+    """C2ST 검증: 같은 분포는 0.5 근처, 다른 분포는 높은 정확도.
+
+    이게 뒤집히면 임베딩 공간 비교 결과를 믿을 수 없다.
+    """
+    from viocf.metrics import classifier_two_sample_test
+
+    rng = np.random.default_rng(0)
+    a = rng.normal(0, 1, (300, 8))
+    same = rng.normal(0, 1, (300, 8))
+    shifted = rng.normal(1.5, 1, (300, 8))
+
+    null = classifier_two_sample_test(a, same)
+    signal = classifier_two_sample_test(a, shifted)
+
+    assert 0.40 < null["accuracy"] < 0.62, "같은 분포인데 구별해버림"
+    assert null["p_value"] > 0.05
+    assert signal["accuracy"] > 0.80, "명백히 다른 분포를 못 구별함"
+    assert signal["p_value"] < 1e-6
+
+
+def test_c2st_handles_degenerate_input() -> None:
+    from viocf.metrics import classifier_two_sample_test
+
+    rng = np.random.default_rng(1)
+    tiny = rng.normal(0, 1, (2, 4))
+    out = classifier_two_sample_test(tiny, rng.normal(0, 1, (2, 4)))
+    assert np.isnan(out["accuracy"])

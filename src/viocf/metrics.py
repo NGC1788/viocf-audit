@@ -276,6 +276,56 @@ def multivariate_energy_distance(x: np.ndarray, y: np.ndarray) -> float:
     )
 
 
+def classifier_two_sample_test(
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: int = 20260826,
+    folds: int = 5,
+) -> dict[str, float]:
+    """C2ST — 분류기 이표본 검정. 고차원 임베딩에는 energy distance 보다 이쪽이 맞다.
+
+    "두 분포가 다른가?" 를 "분류기가 둘을 구별할 수 있는가?" 로 바꾼다.
+    교차검증 정확도가 곧 divergence 다.
+
+      0.5  = 구별 불가 = 두 분포가 같다
+      1.0  = 완벽히 구별 = 완전히 다르다
+
+    energy distance 는 단위가 임의라 '얼마나 다른지'를 말하기 어렵지만, C2ST 는
+    **정확도**라 해석이 바로 된다("모델 출력과 실연주를 78% 로 구별할 수 있다").
+    p 값도 이항검정으로 바로 나온다.
+
+    MERT 같은 768~1024 차원 임베딩에서는 거리 기반 통계량이 차원의 저주로 둔해지는데,
+    C2ST 는 분류기가 판별 방향을 스스로 찾으므로 그 영향을 덜 받는다.
+    """
+    from scipy.stats import binomtest
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.ndim != 2 or y.ndim != 2 or x.shape[1] != y.shape[1]:
+        return {"accuracy": math.nan, "p_value": math.nan, "n": 0}
+    if len(x) < folds or len(y) < folds:
+        return {"accuracy": math.nan, "p_value": math.nan, "n": len(x) + len(y)}
+
+    data = np.vstack([x, y])
+    labels = np.concatenate([np.zeros(len(x)), np.ones(len(y))])
+    ok = np.isfinite(data).all(axis=1)
+    data, labels = data[ok], labels[ok]
+    if len(np.unique(labels)) < 2:
+        return {"accuracy": math.nan, "p_value": math.nan, "n": len(labels)}
+
+    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    predicted = cross_val_predict(
+        HistGradientBoostingClassifier(random_state=seed), data, labels, cv=splitter
+    )
+    correct = int(np.sum(predicted == labels))
+    total = len(labels)
+    # 귀무가설: 분류기가 동전던지기와 같다(정확도 0.5)
+    p = float(binomtest(correct, total, 0.5, alternative="greater").pvalue)
+    return {"accuracy": correct / total, "p_value": p, "n": total}
+
+
 def _split_half_floor(real: np.ndarray, seed: int, repeats: int = 25) -> float:
     """실연주를 무작위로 반 갈라 잰 energy distance 의 중앙값 = 유한표본 바닥."""
     if len(real) < 4:

@@ -6,7 +6,10 @@
 #
 #   T0 게이트   smoke -> pilot        : 짝이 맞는지. 실패하면 뒤는 전부 무의미하므로 여기서 멈춘다.
 #   T1 본체     expanded 코어/delayed : 지표 3개가 나오는 최소 완결 집합.
-#   T2~ 확장    sweep(dense/guidance/steps)
+#   T2~T4 확장  sweep(dense/guidance/steps)
+#   T5 임베딩   MERT 표현 추출        : 해석가능 특징과 독립인 학습된 표현으로 교차확인.
+#                                       GPU 작업이고 클립 수에 비례해 오래 돈다.
+#   T6 분석     특징 -> 지표 -> 그림   : CPU. GPU 를 비우고 돌린다.
 #
 # 재개: 완료된 잡은 verify_violet_run.sh 로 확인하고 건너뛴다. 죽어도 다시 띄우면 이어간다.
 # 진행률: 잡마다 실제 소요시간을 기록해 남은 시간을 계속 다시 추정한다.
@@ -50,6 +53,9 @@ T1	profile	${VIOCF_QUEUE_PROFILE}	본체: 코어 factorial + delayed branch
 T2	sweep	dense	CC1 응답곡선
 T3	sweep	guidance	guidance 4x4 격자 (16잡)
 T4	sweep	steps	확산 스텝 6단계 (6잡)
+T5	embed	${VIOCF_QUEUE_PROFILE}	MERT 임베딩 추출 (GPU)
+T5	embed	sweep	MERT 임베딩 추출 — 스윕 (GPU)
+T6	analyze	${VIOCF_QUEUE_PROFILE}	특징 추출 -> 지표 -> 그림 (CPU)
 STAGES
 )"
 
@@ -121,6 +127,16 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
     sweep)
       VIOCF_SWEEP_PHASE="${VIOCF_ARG}" bash "${VIOCF_ROOT}/scripts/run_compute_sweep.sh" \
         || VIOCF_STAGE_OK=false
+      ;;
+    embed)
+      # 학습된 표현(MERT)으로 교차확인한다. 해석가능 특징이 놓친 누출이 있는지,
+      # 그리고 우리가 본 누출이 표현공간에서도 보이는지. GPU 를 쓴다.
+      bash "${VIOCF_ROOT}/scripts/run_embeddings.sh" "${VIOCF_ARG}" \
+        || VIOCF_STAGE_OK=false
+      ;;
+    analyze)
+      # CPU 단계. GPU 가 비므로 다음 생성 잡과 겹쳐 돌려도 된다.
+      bash "${VIOCF_ROOT}/scripts/run_pilot_analysis.sh" || VIOCF_STAGE_OK=false
       ;;
     *)
       log "  알 수 없는 종류: ${VIOCF_KIND}"
