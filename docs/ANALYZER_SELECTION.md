@@ -128,6 +128,25 @@ MERT 는 headline 지표를 **대체하지 않는다. 감사의 감사다.**
 p 값은 이항검정으로 바로 나온다. 검증 테스트는
 `tests/test_metrics_calibration.py::test_c2st_detects_difference_and_accepts_identical`.
 
+### ⚠ MERT 는 음량을 보지 못한다 (실측)
+
+| 비교 | 코사인 유사도 | 해석 |
+|---|---|---|
+| A4 vs A4 (반복) | 1.0000 | 결정적 (정상) |
+| A4 vs E5 | 0.6053 | 음정 구별함 |
+| A4 vs A4 밝게 | 0.9046 | 음색 구별함 |
+| **A4 vs A4 −12 dB** | **1.0000** | **음량 구별 못함** |
+
+`Wav2Vec2FeatureExtractor` 가 입력을 zero-mean/unit-variance 로 정규화하기 때문이다.
+
+**이걸 모르고 쓰면 "MERT 로 봐도 다이내믹 누출이 없다" 는 거짓 결론이 나온다.**
+MERT 는 애초에 음량을 볼 수 없다. 역할을 이렇게 나눈다:
+
+- **음량(목표 축)** → 해석가능 RMS 특징. ±0.5 dB 로 검증됨.
+- **음색·음정·아티큘레이션(누출 축)** → MERT 교차확인. 우리 특징이 놓쳤을 위험이 가장 큰 곳.
+
+회귀 테스트: `tests/test_embeddings.py::test_mert_is_level_invariant_by_design`
+
 ### 레이어 선택
 
 음악 SSL 모델은 **하위 레이어일수록 음향적(음색·피치), 상위일수록 의미적(장르·무드)**
