@@ -5,9 +5,15 @@ VIOCF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIOCF_VIOLET_DIR="${VIOCF_VIOLET_DIR:-${VIOCF_ROOT}/vendor/VIOLET}"
 VIOCF_HF_BASE="https://huggingface.co/User-tian/VIOLET/resolve/main"
 
+# 체크포인트는 VIOLET 체크아웃 안(vendor/VIOLET/checkpoints)에 놓아야 runner 가 찾는다.
+# 그래서 clone 이 먼저다. 없으면 여기서 직접 돌려준다 — 순서를 헷갈려 다시 치는 일을 없앤다.
 if [[ ! -d "${VIOCF_VIOLET_DIR}/.git" ]]; then
-  echo "Missing VIOLET checkout: ${VIOCF_VIOLET_DIR}"
-  echo "Run scripts/prepare_violet_repo.sh first."
+  echo "VIOLET 체크아웃이 없다. prepare_violet_repo.sh 를 먼저 실행한다."
+  bash "${VIOCF_ROOT}/scripts/prepare_violet_repo.sh"
+  echo
+fi
+if [[ ! -d "${VIOCF_VIOLET_DIR}/.git" ]]; then
+  echo "VIOLET 체크아웃 생성 실패: ${VIOCF_VIOLET_DIR}"
   exit 2
 fi
 if ! command -v curl >/dev/null 2>&1; then
