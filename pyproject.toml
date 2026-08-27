@@ -7,7 +7,11 @@ name = "viocf-audit"
 version = "0.1.0"
 description = "Real-instrument counterfactual audit for controllable violin generators"
 readme = "README_KO.md"
-requires-python = ">=3.10,<3.13"
+# 상한은 실제로 막을 이유가 있을 때만 건다.
+# 3.13 서버에서 설치가 거부돼 확인했다: 핵심 의존성(numpy/pandas/scikit-learn/librosa/
+# scipy/matplotlib/lightgbm)과 swift-f0(순수 파이썬 휠, >=3.8) 전부 3.13 을 지원한다.
+# 3.14 는 아직 검증하지 않았으므로 거기서 상한을 둔다.
+requires-python = ">=3.10,<3.14"
 license = {text = "MIT"}
 dependencies = [
   "lightgbm>=4.0",
