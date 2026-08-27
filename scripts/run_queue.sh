@@ -19,8 +19,13 @@
 #   VIOCF_QUEUE_FROM=T1 bash scripts/run_queue.sh            # 게이트 건너뛰고 재개
 #   VIOCF_QUEUE_DRY_RUN=true bash scripts/run_queue.sh       # 계획만 출력
 #
-# ⚠ VS Code 통합 터미널에서 직접 돌리지 말 것. SSH 가 끊기면(노트북 덮기, 네트워크 끊김,
-#   하교) 프로세스가 죽고 며칠치가 날아간다. 반드시 tmux 안에서.
+# 실행 위치에 대하여:
+#   RustDesk 로 서버 데스크톱을 제어한다면 VS Code 통합 터미널에서 돌려도 된다.
+#   SSH 와 달리 원격 연결이 끊겨도 데스크톱 세션은 서버 안에서 살아 있기 때문이다.
+#   다만 VS Code 자동 업데이트·크래시·서버 재부팅에는 죽는다.
+#   그래서 T1(가장 긴 단계)을 프롬프트 단위로 쪼개 두었다 — 죽어도 최대 26분치만 잃고,
+#   다시 실행하면 끝난 청크는 건너뛴다.
+#   더 안전하게 하려면 tmux 안에서 돌리면 된다: tmux new -s q 'bash scripts/run_queue.sh' 
 set -euo pipefail
 
 VIOCF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,7 +54,7 @@ VIOCF_STAGES="$(
   cat <<STAGES
 T0	profile	smoke	게이트: 같은 그룹 p/f 두 개의 seed 가 같은지
 T0	profile	pilot	게이트: 60클립 파일럿, pairing_pass 전수 확인
-T1	profile	${VIOCF_QUEUE_PROFILE}	본체: 코어 factorial + delayed branch
+T1	chunked	${VIOCF_QUEUE_PROFILE}	본체: 코어 factorial + delayed (프롬프트 단위 재개)
 T2	sweep	dense	CC1 응답곡선
 T3	sweep	guidance	guidance 4x4 격자 (16잡)
 T4	sweep	steps	확산 스텝 6단계 (6잡)
@@ -123,6 +128,11 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
           "${VIOCF_ROOT}/data/midi/${VIOCF_ARG}/model" \
           || VIOCF_STAGE_OK=false
       fi
+      ;;
+    chunked)
+      # 프롬프트 단위로 쪼개 돌린다. 죽어도 20~30분치만 잃는다.
+      bash "${VIOCF_ROOT}/scripts/run_profile_chunked.sh" "${VIOCF_ARG}" \
+        || VIOCF_STAGE_OK=false
       ;;
     sweep)
       VIOCF_SWEEP_PHASE="${VIOCF_ARG}" bash "${VIOCF_ROOT}/scripts/run_compute_sweep.sh" \
