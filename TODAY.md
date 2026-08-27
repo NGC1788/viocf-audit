@@ -140,6 +140,17 @@ bash scripts/launch_violet_tmux.sh pilot
 
 끝난 뒤 collect 결과에서 모든 noise group의 `pairing_pass=true`를 확인한다. 이 검증 전에는 생성 결과를 통계에 넣지 않는다.
 
+## 게이트를 통과한 뒤 — 장시간 실행
+
+단계를 손으로 하나씩 띄우지 말고 큐에 맡긴다. 며칠간 GPU 가 놀지 않는다.
+
+```bash
+tmux new -s viocf_queue 'bash scripts/run_queue.sh'
+```
+
+죽어도 다시 띄우면 `logs/queue_state.tsv` 를 보고 이어서 재개한다.
+**VS Code 통합 터미널에서 돌리지 말 것** — SSH 가 끊기면 프로세스가 같이 죽는다.
+
 ## 오늘 하지 않을 일
 
 - VIOLET 전체 재학습

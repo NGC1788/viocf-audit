@@ -72,6 +72,26 @@ manifests/pilot_delayed_real.csv
 data/midi/pilot/
 ```
 
+## 장시간 실행 (권장)
+
+GPU 를 며칠씩 놀리지 않고 돌리려면 단계를 하나씩 손으로 띄우지 말고 큐를 쓴다.
+
+```bash
+tmux new -s viocf_queue 'bash scripts/run_queue.sh'
+tmux attach -t viocf_queue     # 구경만 하고 Ctrl-b d 로 빠져나오기
+tail -f logs/queue.log         # 또는 로그만
+```
+
+- 순서: T0 게이트(smoke→pilot) → T1 본체 → T2~T4 스윕.
+  **T0 가 실패하면 큐가 즉시 멈춘다** — 짝이 깨진 채로 뒤를 돌리면 전부 버리게 되므로.
+- 완료된 단계는 `logs/queue_state.tsv` 에 기록되고 다시 띄우면 건너뛴다. 죽어도 이어서 재개된다.
+- `VIOCF_QUEUE_FROM=T2` 로 앞 단계를 건너뛰고, `VIOCF_QUEUE_DRY_RUN=true` 로 계획만 볼 수 있다.
+- `VIOCF_QUEUE_PROFILE=full` 로 축소 실행. 기본은 `expanded`.
+
+> ⚠ **VS Code 통합 터미널에서 직접 돌리지 말 것.** VS Code Remote-SSH 는 편집·모니터링용이다.
+> 통합 터미널에서 실행하면 노트북을 덮거나 네트워크가 끊기는 순간 프로세스가 죽는다.
+> 실행은 반드시 tmux 안에서 하고, VS Code 로는 attach 해서 보기만 한다.
+
 ## VIOLET 준비
 
 접근 상태 확인:
