@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from viocf.calibration import fit_technique_calibration
 from viocf.metrics import run_metric_suite
@@ -115,3 +116,76 @@ def test_calibration_mapping_is_monotonic(tmp_path: Path) -> None:
     for _, group in mapping.groupby("technique"):
         assert np.all(np.diff(group.sort_values("desired_cc1")["corrected_cc1"]) >= 0)
     assert outputs["figure"].exists()
+
+
+# ---------------------------------------------------------------- 통계 도구 검증
+def test_holm_adjust_matches_known_values() -> None:
+    """Holm-Bonferroni 를 손으로 계산한 값과 대조한다.
+
+    p = 0.01, 0.02, 0.03 (m=3) 이면
+      0.01*3 = 0.03
+      0.02*2 = 0.04
+      0.03*1 = 0.03 -> 단조 강제로 0.04
+    """
+    from viocf.metrics import holm_adjust
+
+    out = holm_adjust({"a": 0.01, "b": 0.02, "c": 0.03})
+    assert out["a"] == pytest.approx(0.03, abs=1e-9)
+    assert out["b"] == pytest.approx(0.04, abs=1e-9)
+    assert out["c"] == pytest.approx(0.04, abs=1e-9)  # 단조 강제
+
+
+def test_holm_adjust_is_monotone_and_bounded() -> None:
+    from viocf.metrics import holm_adjust
+
+    out = holm_adjust({f"f{i}": p for i, p in enumerate([0.5, 0.001, 0.9, 0.04])})
+    values = sorted(out.values())
+    assert all(0.0 <= v <= 1.0 for v in values)
+    assert values == sorted(values)
+
+
+def test_permutation_pvalue_separates_signal_from_noise() -> None:
+    """진짜 효과에는 작은 p, 순수 잡음에는 큰 p 가 나와야 한다."""
+    from viocf.metrics import cluster_permutation_pvalue
+
+    rng = np.random.default_rng(0)
+    prompts = [f"p{i}" for i in range(24)]
+    signal = pd.DataFrame(
+        {"prompt_id": np.repeat(prompts, 4),
+         "excess_leakage": rng.normal(1.2, 0.3, 96)}
+    )
+    noise = pd.DataFrame(
+        {"prompt_id": np.repeat(prompts, 4),
+         "excess_leakage": rng.normal(0.0, 0.3, 96)}
+    )
+    assert cluster_permutation_pvalue(signal, "excess_leakage") < 0.01
+    assert cluster_permutation_pvalue(noise, "excess_leakage") > 0.10
+
+
+def test_hierarchical_bootstrap_is_wider_than_naive_cluster_bootstrap() -> None:
+    """2단계 부트스트랩은 클러스터 내부 변동까지 반영하므로 CI 가 더 넓어야 한다.
+
+    이게 뒤집히면 'hierarchical' 이라는 이름이 거짓이 된다.
+    """
+    from viocf.metrics import bootstrap_mean_ci
+
+    rng = np.random.default_rng(1)
+    prompts = [f"p{i}" for i in range(24)]
+    frame = pd.DataFrame(
+        {"prompt_id": np.repeat(prompts, 8),
+         "value": np.repeat(rng.normal(0, 0.5, 24), 8) + rng.normal(0, 1.5, 192)}
+    )
+    out = bootstrap_mean_ci(frame, "value", iterations=800, seed=3)
+    assert out["bootstrap"] == "hierarchical"
+    assert out["n_clusters"] == 24
+
+    # 같은 데이터로 1단계(클러스터만 재표집) CI 를 직접 계산해 비교한다.
+    rng2 = np.random.default_rng(3)
+    by = {k: g["value"].to_numpy() for k, g in frame.groupby("prompt_id")}
+    keys = list(by)
+    naive = []
+    for _ in range(800):
+        picks = rng2.integers(0, len(keys), size=len(keys))
+        naive.append(float(np.mean(np.concatenate([by[keys[i]] for i in picks]))))
+    naive_width = float(np.quantile(naive, 0.975) - np.quantile(naive, 0.025))
+    assert (out["ci_high"] - out["ci_low"]) > naive_width

@@ -16,7 +16,16 @@ from .pitch import estimate_monophonic_pitch, modulation_track
 EPS = 1e-12
 
 VIBRATO_BAND_HZ = (3.0, 9.0)      # 바이올린 비브라토 통상 범위
-DIP_PROMINENCE_DB = 3.0           # 이만큼 파여야 '활바꿈/재발음' 1회로 센다
+# 이만큼 파여야 '활바꿈/재발음' 1회로 센다.
+# ⚠ 이 값은 sustain(데타셰)과 legato_slur 의 구분을 좌우하므로 임의로 정하면 안 된다.
+# 민감도 실측(합성 8음 악구, 12 dB 활바꿈 노치 주입):
+#     임계값 1.0 / 2.0 / 3.0 / 4.5 dB -> 두 주법이 분리됨 (slur 0.0 vs detache 5.0 dB)
+#     임계값 6.0 / 9.0 dB             -> 둘 다 0.0 으로 붕괴, 구분 불가
+# 유효 구간이 1.0~4.5 dB 이고 3.0 은 그 안에 있다. 다만 위쪽 여유가 1.5 dB 뿐이고
+# 이건 합성음 기준이다. 12 dB 노치를 넣어도 25 ms RMS 프레임이 뭉개서 측정 prominence
+# 는 5 dB 밖에 안 나온다. **실제 활바꿈은 더 얕을 수 있으므로 파일럿 녹음으로
+# 반드시 재검증할 것** (scripts/run_pilot_analysis.sh 결과에서 두 주법의 분리를 확인).
+DIP_PROMINENCE_DB = 3.0
 
 
 def _safe_float(value: Any, default: float = math.nan) -> float:

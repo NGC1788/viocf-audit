@@ -288,7 +288,8 @@ importance와 ExtraTrees response surrogate가 생성된다. feature importance�
 - 세 사람의 실력 비교
 - 청취자 없이 감정·자연스러움·선호도가 향상됐다는 주장
 - 모든 비목표 특징 변화가 나쁘다는 주장
-- VioPTT 하나만으로 주법 성공 여부를 판정하는 것
+- [VioPTT](https://arxiv.org/abs/2509.23759) 하나만으로 주법 성공 여부를 판정하는 것
+  (저자 일부가 VIOLET 과 겹치고 둘 다 합성 학습자료를 쓴다 → 순환 평가)
 - CSV-TD나 VIOLET 체크포인트의 재배포
 
 코드에는 MIT 라이선스를 적용했지만, VIOLET·체크포인트·데이터는 각 원 저작자의 이용조건을 별도로 따른다.

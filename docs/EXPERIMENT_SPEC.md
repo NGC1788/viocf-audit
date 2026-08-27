@@ -34,15 +34,29 @@ I(t,d)  = z(t,d) - z(t,mf) - z(sustain,d) + z(sustain,mf)
 2. Human-calibrated Excess Leakage
 3. Human-calibrated Compositionality Gap
 
-RMS–CC1 Spearman, FAD, VioPTT accuracy는 secondary endpoint다.
+RMS–CC1 Spearman 은 secondary endpoint 다.
+
+**미구현 항목의 지위** — 아래 둘은 이 저장소에 구현돼 있지 않다. 구현 전까지
+결과·발표에서 언급하지 않는다(약속만 하고 없는 지표는 그 자체가 결함이다).
+- **FAD**: 오디오 품질 지표. 이 연구의 질문(제어 충실도)과 직교하며, 참조 분포 선택이
+  결과를 좌우해 논쟁을 부른다. 넣으려면 참조 코퍼스를 명세에 먼저 고정해야 한다.
+- **VioPTT accuracy**: [VioPTT](https://arxiv.org/abs/2509.23759) 는 저자 일부가
+  VIOLET 과 겹치고 둘 다 합성 학습자료를 쓴다. 그대로 쓰면 순환 평가다. 쓴다면
+  **독립적인 주법 검출기**(예: MERTech, arXiv 2310.09853)와 병행해 일치할 때만 인용한다.
 
 ## 통계 단위
 
 - frame이나 note를 독립 표본으로 세지 않는다.
 - primary generalization unit은 prompt다.
 - model seed와 real take/violin은 prompt 내부 반복이다.
-- prompt-level hierarchical bootstrap을 사용한다.
-- 세 global endpoint만 confirmatory로 두고 세부 비교는 Holm 보정한다.
+- prompt-level **2단계(hierarchical) 부트스트랩**을 사용한다: prompt 를 복원추출한 뒤
+  뽑힌 prompt 안에서 관측치를 다시 복원추출한다 (`metrics.bootstrap_mean_ci`).
+  클러스터만 재표집하는 1단계 부트스트랩은 클러스터 내부 변동을 무시해 CI 를 좁게 낸다.
+- 세 global endpoint(CEA/HCEL/CG)만 confirmatory 로 두고, 특징별 누출 비교는
+  **Holm-Bonferroni 보정**한다 (`metrics.holm_adjust`). p 값은 prompt 단위
+  부호뒤집기 순열검정으로 낸다 (`metrics.cluster_permutation_pvalue`) — prompt 내부
+  상관을 깨지 않기 위해서다. 결과는 `metrics_summary.json` 의
+  `leakage_per_feature_tests` 에 원시 p 와 보정 p 가 함께 기록된다.
 
 ## Calibration split
 

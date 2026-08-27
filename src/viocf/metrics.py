@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -481,18 +481,92 @@ def bootstrap_mean_ci(
             "신뢰구간이 불안정하다. 파일럿 수치는 확증용으로 쓰지 말 것.",
             stacklevel=2,
         )
+    # ---- 2단계(hierarchical) 부트스트랩 --------------------------------------
+    # 사전고정 명세가 "prompt-level hierarchical bootstrap" 을 약속했다.
+    # 클러스터만 재표집하는 1단계 부트스트랩은 클러스터 **내부**의 표집 변동을 무시해서
+    # 신뢰구간을 좁게 낸다. 여기서는 (1) prompt 를 복원추출하고, (2) 뽑힌 prompt 안에서
+    # 관측치를 다시 복원추출한다. 이게 명세가 말한 hierarchical 이다.
     rng = np.random.default_rng(seed)
+    by_cluster = {
+        key: group[value].to_numpy(dtype=float)
+        for key, group in clean.groupby(cluster, sort=True)
+    }
+    order = list(by_cluster)
+    index = {name: position for position, name in enumerate(order)}
+    arrays = [by_cluster[name] for name in order]
+
     estimates = []
     for _ in range(iterations):
-        sampled = rng.choice(clusters, size=len(clusters), replace=True)
-        pieces = [clean.loc[clean[cluster].eq(item), value] for item in sampled]
-        values = pd.concat(pieces, ignore_index=True).to_numpy(dtype=float)
-        estimates.append(float(np.mean(values)))
+        picks = rng.integers(0, len(order), size=len(order))
+        drawn = []
+        for position in picks:
+            values = arrays[position]
+            if values.size:
+                drawn.append(values[rng.integers(0, values.size, size=values.size)])
+        if not drawn:
+            continue
+        estimates.append(float(np.mean(np.concatenate(drawn))))
+    if not estimates:
+        return {"mean": math.nan, "ci_low": math.nan, "ci_high": math.nan,
+                "n_clusters": len(order), "bootstrap": "hierarchical"}
+    del index
     return {
         "mean": float(clean[value].mean()),
         "ci_low": float(np.quantile(estimates, 0.025)),
         "ci_high": float(np.quantile(estimates, 0.975)),
+        "n_clusters": len(order),
+        "bootstrap": "hierarchical",
     }
+
+
+def holm_adjust(pvalues: Mapping[str, float]) -> dict[str, float]:
+    """Holm-Bonferroni 다중비교 보정. 사전고정 명세가 세부 비교에 요구한다.
+
+    headline 3개(CEA/HCEL/CG)는 confirmatory 라 보정하지 않는다. 그 아래의
+    특징별·주법별 비교는 개수가 수십 개라 보정 없이는 우연한 '누출 발견'이 쏟아진다.
+
+    반환값은 조정된 p 값이며 원래 순서를 유지한 dict 다.
+    """
+    items = [(name, float(value)) for name, value in pvalues.items() if np.isfinite(value)]
+    if not items:
+        return {name: math.nan for name in pvalues}
+    items.sort(key=lambda pair: pair[1])
+    total = len(items)
+    adjusted: dict[str, float] = {}
+    running = 0.0
+    for rank, (name, raw) in enumerate(items):
+        candidate = min(1.0, (total - rank) * raw)
+        running = max(running, candidate)  # Holm 은 단조 증가하도록 강제한다
+        adjusted[name] = running
+    for name in pvalues:
+        adjusted.setdefault(name, math.nan)
+    return {name: adjusted[name] for name in pvalues}
+
+
+def cluster_permutation_pvalue(
+    frame: pd.DataFrame,
+    value: str,
+    cluster: str = "prompt_id",
+    null_value: float = 0.0,
+    iterations: int = 2000,
+    seed: int = 20260826,
+) -> float:
+    """클러스터 단위 부호뒤집기 순열검정으로 p 값을 낸다.
+
+    holm_adjust 에 넣을 p 값이 있어야 명세의 보정 조항이 실체를 갖는다.
+    prompt 단위로 부호를 뒤집으므로 prompt 내부 상관을 깨지 않는다.
+    """
+    clean = frame[[cluster, value]].dropna()
+    if clean.empty:
+        return math.nan
+    means = clean.groupby(cluster)[value].mean().to_numpy(dtype=float) - null_value
+    if means.size < 2:
+        return math.nan
+    observed = abs(float(np.mean(means)))
+    rng = np.random.default_rng(seed)
+    signs = rng.choice((-1.0, 1.0), size=(iterations, means.size))
+    null = np.abs((signs * means).mean(axis=1))
+    return float((1.0 + np.sum(null >= observed)) / (1.0 + iterations))
 
 
 def run_metric_suite(
@@ -590,6 +664,35 @@ def run_metric_suite(
             .reset_index()
             .to_dict(orient="records")
         )
+    # ---- 세부 비교의 Holm 보정 -------------------------------------------------
+    # headline 3개는 confirmatory 라 보정하지 않는다. 아래 특징별 누출 비교는
+    # 개수가 많아 보정 없이는 우연한 '발견'이 쏟아진다(명세 통계 단위 절).
+    if not leakage.empty and "feature" in leakage.columns:
+        raw_p: dict[str, float] = {}
+        for feature, group in leakage.groupby("feature"):
+            if "prompt_id" not in group.columns:
+                continue
+            raw_p[str(feature)] = cluster_permutation_pvalue(
+                group, "excess_leakage", cluster="prompt_id",
+                iterations=iterations, seed=random_seed + 7,
+            )
+        if raw_p:
+            adjusted = holm_adjust(raw_p)
+            headline["leakage_per_feature_tests"] = {
+                name: {
+                    "p_raw": raw_p[name],
+                    "p_holm": adjusted[name],
+                    "significant_after_holm": bool(
+                        np.isfinite(adjusted[name]) and adjusted[name] < 0.05
+                    ),
+                }
+                for name in sorted(raw_p)
+            }
+            headline["multiple_comparison_correction"] = "holm-bonferroni"
+            headline["confirmatory_endpoints"] = [
+                "effect_alignment", "excess_leakage", "compositionality_gap_mean",
+            ]
+
     if not delayed_strict.empty:
         spread_cols = [c for c in delayed_strict.columns if c.startswith("spread_")]
         headline["delayed_model_only_prebranch"] = {

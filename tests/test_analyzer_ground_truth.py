@@ -219,3 +219,40 @@ def test_envelope_dip_orders_across_all_four_techniques(tmp_path: Path) -> None:
         sf.write(path, _passage(dip, fraction, decay), SAMPLE_RATE, subtype="PCM_24")
         depths.append(extract_features(path, metadata, CONFIG)["env_dip_depth_db"])
     assert depths[0] < depths[1] < depths[2]
+
+
+def test_dip_threshold_has_a_valid_plateau(tmp_path: Path) -> None:
+    """DIP_PROMINENCE_DB 가 임의값이 아니라 유효 구간 안에 있음을 고정한다.
+
+    이 상수는 sustain(데타셰) vs legato_slur 구분을 좌우한다. 누가 값을 바꾸면
+    두 주법이 구분 불가가 되고 technique contrast 가 통째로 무의미해지므로,
+    현재 값이 분리가 유지되는 구간 안에 있는지를 회귀 테스트로 못 박는다.
+    """
+    from viocf import features as feature_module
+
+    metadata = METADATA | {"single_pitch": False, "reference_midi": math.nan}
+    paths = {}
+    for name, dip in (("slur", 0.0), ("detache", -12.0)):
+        path = tmp_path / f"thr_{name}.wav"
+        sf.write(path, _passage(dip), SAMPLE_RATE, subtype="PCM_24")
+        paths[name] = path
+
+    original = feature_module.DIP_PROMINENCE_DB
+    try:
+        separated = []
+        for threshold in (1.0, 2.0, 3.0, 4.5, 6.0):
+            feature_module.DIP_PROMINENCE_DB = threshold
+            depths = {
+                name: extract_features(path, metadata, CONFIG)["env_dip_depth_db"]
+                for name, path in paths.items()
+            }
+            if depths["detache"] > depths["slur"] + 2.0:
+                separated.append(threshold)
+        # 현재 채택값이 분리가 유지되는 구간 안에 있어야 한다.
+        assert original in separated, (
+            f"DIP_PROMINENCE_DB={original} 가 유효 구간 {separated} 밖이다"
+        )
+        # 구간이 한 점뿐이면 우연히 맞은 것이므로 근거로 쓸 수 없다.
+        assert len(separated) >= 3
+    finally:
+        feature_module.DIP_PROMINENCE_DB = original
