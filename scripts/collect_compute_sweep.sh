@@ -49,6 +49,10 @@ for manifest in "${VIOCF_MANIFEST_DIR}"/guidance_wt*_wc*.csv; do
   label="g_${stem#guidance_}"
   collect_one "${label}" "${manifest}"
 done
+for manifest in "${VIOCF_MANIFEST_DIR}"/steps_n*.csv; do
+  stem="$(basename "${manifest}" .csv)"
+  collect_one "${stem}" "${manifest}"
+done
 
 echo "All sweep audio collected into data/model_audio/sweep."
 echo "QA reports: ${VIOCF_REPORT_DIR}"

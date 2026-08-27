@@ -174,7 +174,7 @@ def _write_reference_midi(
 def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str, Path]:
     root = project_root_from_config(config)
     prompts = build_prompts(config, profile)
-    techniques = config.techniques
+    techniques = config.model_techniques_for_profile(profile)
     real_techniques = config.real_techniques
     dynamics = config.dynamics
     base_seed = int(config.raw["model"]["base_seed"])
@@ -232,6 +232,11 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                             "pattern": prompt.pattern,
                             "register": prompt.register,
                             "technique": technique,
+                            "analysis_tier": (
+                                "real_counterfactual_primary"
+                                if technique in real_techniques
+                                else "generator_only_exploratory"
+                            ),
                             "technique_keyswitch": keyswitch,
                             "dynamic_label": dynamic_label,
                             "cc1_initial": cc1,
@@ -243,8 +248,18 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                             "replicate": replicate,
                             "w_tech": float(config.raw["model"]["w_tech"]),
                             "w_cc": float(config.raw["model"]["w_cc"]),
-                            "reference_midi": prompt.reference_midi,
-                            "single_pitch": prompt.single_pitch,
+                            "sampling_steps": int(
+                                config.raw["model"].get("sampling_steps", 30)
+                            ),
+                            "reference_midi": (
+                                prompt.reference_midi
+                                if technique not in {"trill_major", "trill_minor"}
+                                else np.nan
+                            ),
+                            "single_pitch": bool(
+                                prompt.single_pitch
+                                and technique not in {"trill_major", "trill_minor"}
+                            ),
                             "note_onset_s": config.note_onset_seconds,
                             "midi_path": _relative(midi_path, root),
                             "audio_path": f"data/model_audio/{clip_id}.wav",
@@ -268,6 +283,7 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                                 "pattern": prompt.pattern,
                                 "register": prompt.register,
                                 "technique": technique,
+                                "analysis_tier": "real_counterfactual_primary",
                                 "technique_keyswitch": keyswitch,
                                 "dynamic_label": dynamic_label,
                                 "cc1_initial": cc1,
@@ -342,6 +358,7 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                         "pattern": delayed_prompt.pattern,
                         "register": delayed_prompt.register,
                         "technique": technique,
+                        "analysis_tier": "real_counterfactual_primary",
                         "technique_keyswitch": keyswitch,
                         "dynamic_label": dynamic_label,
                         "cc1_initial": 64,
@@ -353,6 +370,9 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                         "replicate": replicate,
                         "w_tech": float(config.raw["model"]["w_tech"]),
                         "w_cc": float(config.raw["model"]["w_cc"]),
+                        "sampling_steps": int(
+                            config.raw["model"].get("sampling_steps", 30)
+                        ),
                         "reference_midi": 69,
                         "single_pitch": True,
                         "note_onset_s": config.note_onset_seconds,
@@ -381,6 +401,7 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
                             "pattern": delayed_prompt.pattern,
                             "register": delayed_prompt.register,
                             "technique": technique,
+                            "analysis_tier": "real_counterfactual_primary",
                             "technique_keyswitch": keyswitch,
                             "dynamic_label": dynamic_label,
                             "cc1_initial": 64,
@@ -430,6 +451,12 @@ def create_design(config: ExperimentConfig, profile: str = "pilot") -> dict[str,
         "real_takes": len(real_rows),
         "delayed_model_clips": len(delayed_model),
         "delayed_real_takes": len(delayed_real),
+        "primary_model_clips": int(
+            sum(row["analysis_tier"] == "real_counterfactual_primary" for row in model_rows)
+        ),
+        "exploratory_model_clips": int(
+            sum(row["analysis_tier"] == "generator_only_exploratory" for row in model_rows)
+        ),
         "midi_files": len(all_midi),
         "invalid_midi": [row for row in validation if not row["valid"]],
         "critical_note": "Do not record the full design until the pilot and VIOLET smoke test pass.",

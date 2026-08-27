@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -lt 2 || "$#" -gt 4 ]]; then
-  echo "Usage: $0 RUN_DIR MIDI_DIR [EXPECTED_W_TECH EXPECTED_W_CC]"
+if [[ "$#" -lt 2 || "$#" -gt 5 ]]; then
+  echo "Usage: $0 RUN_DIR MIDI_DIR [EXPECTED_W_TECH EXPECTED_W_CC EXPECTED_STEPS]"
   exit 2
 fi
 
@@ -10,12 +10,14 @@ VIOCF_RUN_DIR="$1"
 VIOCF_MIDI_DIR="$2"
 VIOCF_EXPECTED_W_TECH="${3:-}"
 VIOCF_EXPECTED_W_CC="${4:-}"
+VIOCF_EXPECTED_STEPS="${5:-}"
 
 python3 - \
   "${VIOCF_RUN_DIR}" \
   "${VIOCF_MIDI_DIR}" \
   "${VIOCF_EXPECTED_W_TECH}" \
-  "${VIOCF_EXPECTED_W_CC}" <<'PY'
+  "${VIOCF_EXPECTED_W_CC}" \
+  "${VIOCF_EXPECTED_STEPS}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -30,6 +32,7 @@ run_dir = Path(sys.argv[1]).resolve()
 midi_dir = Path(sys.argv[2]).resolve()
 expected_w_tech = None if not sys.argv[3] else float(sys.argv[3])
 expected_w_cc = None if not sys.argv[4] else float(sys.argv[4])
+expected_steps = None if not sys.argv[5] else int(sys.argv[5])
 
 if not run_dir.is_dir():
     raise SystemExit(f"FAIL: missing run directory: {run_dir}")
@@ -103,6 +106,15 @@ for record in records:
         float(record["effective_w_cc"]), expected_w_cc, abs_tol=1e-9
     ):
         raise SystemExit(f"FAIL: wrong w_cc in {filename}")
+    if expected_steps is not None:
+        actual_steps = record.get("effective_sampling_steps")
+        if actual_steps is None:
+            raise SystemExit(f"FAIL: no sampling-step audit field in {filename}")
+        if int(actual_steps) != expected_steps:
+            raise SystemExit(
+                f"FAIL: wrong sampling steps in {filename}: "
+                f"{actual_steps} != {expected_steps}"
+            )
 
 bad_groups = {group: seeds for group, seeds in seeds_by_group.items() if len(seeds) != 1}
 if bad_groups:

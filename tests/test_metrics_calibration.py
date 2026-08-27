@@ -91,6 +91,21 @@ def test_metric_suite_outputs(tmp_path: Path) -> None:
     assert outputs["summary"].exists()
 
 
+def test_metric_suite_excludes_generator_only_rows_from_headlines(tmp_path: Path) -> None:
+    frame = synthetic_feature_table()
+    frame["analysis_tier"] = "real_counterfactual_primary"
+    exploratory = frame.loc[frame["source"].eq("model")].copy()
+    exploratory["clip_id"] = "extra-" + exploratory["clip_id"]
+    exploratory["technique"] = "trill_major"
+    exploratory["analysis_tier"] = "generator_only_exploratory"
+    combined = pd.concat([frame, exploratory], ignore_index=True)
+    features = tmp_path / "features.csv"
+    combined.to_csv(features, index=False)
+    outputs = run_metric_suite([features], tmp_path / "metrics", CONFIG)
+    monotonicity = pd.read_csv(outputs["monotonicity"])
+    assert "trill_major" not in set(monotonicity["technique"])
+
+
 def test_calibration_mapping_is_monotonic(tmp_path: Path) -> None:
     features = tmp_path / "features.csv"
     synthetic_feature_table().to_csv(features, index=False)
@@ -100,4 +115,3 @@ def test_calibration_mapping_is_monotonic(tmp_path: Path) -> None:
     for _, group in mapping.groupby("technique"):
         assert np.all(np.diff(group.sort_values("desired_cc1")["corrected_cc1"]) >= 0)
     assert outputs["figure"].exists()
-

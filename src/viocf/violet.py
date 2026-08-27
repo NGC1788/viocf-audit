@@ -62,6 +62,12 @@ def collect_violet_run(
             atol=1e-8,
             equal_nan=False,
         )
+    if "sampling_steps" in merged.columns:
+        expected_steps = pd.to_numeric(merged["sampling_steps"], errors="coerce")
+        actual_steps = pd.to_numeric(merged.get("effective_sampling_steps"), errors="coerce")
+        merged["sampling_steps_match_expected"] = expected_steps.eq(actual_steps)
+    else:
+        merged["sampling_steps_match_expected"] = False
     copied_paths: list[str | None] = []
     hashes: list[str | None] = []
     for record in merged.to_dict(orient="records"):
@@ -106,6 +112,7 @@ def collect_violet_run(
             w_cc_max=("effective_w_cc", "max"),
             w_tech_matches_expected=("w_tech_matches_expected", "all"),
             w_cc_matches_expected=("w_cc_matches_expected", "all"),
+            sampling_steps_match_expected=("sampling_steps_match_expected", "all"),
         )
         .reset_index()
     )
@@ -115,6 +122,7 @@ def collect_violet_run(
         & (group_qa["render_attempt_max"] == 1)
         & group_qa["w_tech_matches_expected"]
         & group_qa["w_cc_matches_expected"]
+        & group_qa["sampling_steps_match_expected"]
     )
 
     report = Path(output_report)

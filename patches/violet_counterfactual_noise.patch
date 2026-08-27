@@ -116,7 +116,7 @@ index 6e988a398ddabb4231361bb33ba189e201753f8c..6a000534ee8e294fd134bc9ee688dc92
                  continue
  
              saved_branch_audio = {}
-@@ -1664,7 +1684,10 @@ class ViolinDiffusionModule(LightningModule):
+@@ -1664,10 +1684,14 @@ class ViolinDiffusionModule(LightningModule):
                  "filename": filenames[i],
                  "midi_path": midi_path,
                  "saved_audio": os.path.basename(save_path),
@@ -127,3 +127,7 @@ index 6e988a398ddabb4231361bb33ba189e201753f8c..6a000534ee8e294fd134bc9ee688dc92
                  "effective_guidance_mode": generation_info["effective_guidance_mode"],
                  "active_output_equals_branch": generation_info["active_output_equals_branch"],
                  "effective_cond_scale": generation_info["cond_scale"],
++                "effective_sampling_steps": int(getattr(self.sampler, "num_steps", -1)),
+                 "effective_w_tech": generation_info["w_tech"],
+                 "effective_w_cc": generation_info["w_cc"],
+                 "sampler_cond_scale": getattr(self.sampler, "cond_scale", None),

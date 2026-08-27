@@ -36,8 +36,13 @@ cat results/preflight.json
 
 ```bash
 bash scripts/check_violet_access.sh
-huggingface-cli download User-tian/VIOLET --local-dir checkpoints/
+bash scripts/download_violet_checkpoints.sh
 ```
+
+이 스크립트는 두 파일을 재개 가능하게 받은 뒤 **크기와 SHA-256 을 대조**하고,
+runner 가 실제로 읽는 위치(`vendor/VIOLET/checkpoints`)에 놓는다.
+`huggingface-cli download ... --local-dir checkpoints/` 는 저장소 루트에 받으므로
+runner 가 못 찾는다 — 쓰지 말 것.
 
 `200 (public, ungated)` 이 나오면 바로 받으면 된다.
 

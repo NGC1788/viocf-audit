@@ -50,6 +50,8 @@ def command_make_sweep(args: argparse.Namespace) -> None:
         config,
         dense_replicates=args.dense_replicates,
         guidance_replicates=args.guidance_replicates,
+        steps_replicates=args.steps_replicates,
+        include_exploratory_techniques=args.include_exploratory_techniques,
     )
     _json_print({key: str(value) for key, value in outputs.items()})
 
@@ -234,9 +236,17 @@ def build_parser() -> argparse.ArgumentParser:
     design.add_argument("--profile", choices=["pilot", "full", "expanded"], default="pilot")
     design.set_defaults(func=command_make_design)
 
-    sweep = subparsers.add_parser("make-sweep", help="Generate dense CC1 and guidance sweeps")
+    sweep = subparsers.add_parser(
+        "make-sweep", help="Generate dense CC1, guidance, and sampler-step sweeps"
+    )
     sweep.add_argument("--dense-replicates", type=int, default=8)
     sweep.add_argument("--guidance-replicates", type=int, default=4)
+    sweep.add_argument("--steps-replicates", type=int, default=8)
+    sweep.add_argument(
+        "--include-exploratory-techniques",
+        action="store_true",
+        help="Also sweep techniques without a real-instrument baseline",
+    )
     sweep.set_defaults(func=command_make_sweep)
 
     smoke = subparsers.add_parser("make-smoke", help="Create a two-clip same-noise smoke test")

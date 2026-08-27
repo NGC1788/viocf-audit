@@ -9,8 +9,9 @@ VIOCF_SWEEP_MANIFEST_DIR="${VIOCF_SWEEP_MANIFEST_DIR:-${VIOCF_ROOT}/manifests/sw
 
 if [[ "${VIOCF_SWEEP_PHASE}" != "all" &&
   "${VIOCF_SWEEP_PHASE}" != "dense" &&
-  "${VIOCF_SWEEP_PHASE}" != "guidance" ]]; then
-  echo "VIOCF_SWEEP_PHASE must be all, dense, or guidance."
+  "${VIOCF_SWEEP_PHASE}" != "guidance" &&
+  "${VIOCF_SWEEP_PHASE}" != "steps" ]]; then
+  echo "VIOCF_SWEEP_PHASE must be all, dense, guidance, or steps."
   exit 2
 fi
 if [[ "${VIOCF_SWEEP_DRY_RUN}" != "true" && "${VIOCF_SWEEP_DRY_RUN}" != "false" ]]; then
@@ -49,6 +50,8 @@ if phase in {"all", "guidance"}:
     # guidance_all.csv is an analysis convenience file with mixed weights;
     # render only the one-weight-pair manifests.
     manifests.extend(sorted(manifest_dir.glob("guidance_wt*_wc*.csv")))
+if phase in {"all", "steps"}:
+    manifests.extend(sorted(manifest_dir.glob("steps_n*.csv")))
 
 if not manifests or any(not path.is_file() for path in manifests):
     missing = [str(path) for path in manifests if not path.is_file()]
@@ -60,7 +63,7 @@ for manifest in manifests:
     if not rows:
         raise SystemExit(f"Empty sweep manifest: {manifest}")
 
-    required = {"clip_id", "midi_path", "w_tech", "w_cc"}
+    required = {"clip_id", "midi_path", "w_tech", "w_cc", "sampling_steps"}
     missing_columns = required - set(rows[0])
     if missing_columns:
         raise SystemExit(f"{manifest}: missing columns {sorted(missing_columns)}")
@@ -69,6 +72,12 @@ for manifest in manifests:
     if len(pairs) != 1:
         raise SystemExit(f"{manifest}: mixed guidance pairs {sorted(pairs)}")
     w_tech, w_cc = next(iter(pairs))
+    sampler_steps = {int(row["sampling_steps"]) for row in rows}
+    if len(sampler_steps) != 1:
+        raise SystemExit(f"{manifest}: mixed sampling_steps {sorted(sampler_steps)}")
+    n_steps = next(iter(sampler_steps))
+    if n_steps < 2:
+        raise SystemExit(f"{manifest}: sampling_steps must be at least 2")
 
     midi_paths = []
     for row in rows:
@@ -96,7 +105,7 @@ for manifest in manifests:
         )
 
     label = manifest.stem.replace("guidance_", "g_")
-    print(f"{label}\t{midi_dir}\t{w_tech:g}\t{w_cc:g}\t{len(rows)}")
+    print(f"{label}\t{midi_dir}\t{w_tech:g}\t{w_cc:g}\t{n_steps}\t{len(rows)}")
 PY
 } 2>&1)" || {
   echo "${VIOCF_PLAN}"
@@ -112,13 +121,13 @@ echo "Sweep run id: ${VIOCF_SWEEP_RUN_ID}"
 echo "Sweep phase: ${VIOCF_SWEEP_PHASE}"
 echo "Planned jobs: $(printf '%s\n' "${VIOCF_PLAN}" | wc -l | tr -d ' ')"
 
-while IFS=$'\t' read -r VIOCF_LABEL VIOCF_MIDI_DIR VIOCF_W_TECH VIOCF_W_CC VIOCF_EXPECTED; do
+while IFS=$'\t' read -r VIOCF_LABEL VIOCF_MIDI_DIR VIOCF_W_TECH VIOCF_W_CC VIOCF_SAMPLER_STEPS VIOCF_EXPECTED; do
   [[ -n "${VIOCF_LABEL}" ]] || continue
   VIOCF_JOB_RUN_ID="${VIOCF_SWEEP_RUN_ID}_${VIOCF_LABEL}"
   VIOCF_JOB_RUN_DIR="${VIOCF_ROOT}/logs/violet/sweep/${VIOCF_JOB_RUN_ID}"
 
   echo
-  echo "[${VIOCF_LABEL}] ${VIOCF_EXPECTED} clips; w_tech=${VIOCF_W_TECH}, w_cc=${VIOCF_W_CC}"
+  echo "[${VIOCF_LABEL}] ${VIOCF_EXPECTED} clips; w_tech=${VIOCF_W_TECH}, w_cc=${VIOCF_W_CC}, steps=${VIOCF_SAMPLER_STEPS}"
   if awk -v wt="${VIOCF_W_TECH}" -v wc="${VIOCF_W_CC}" \
     'BEGIN { exit !(wt == 0 && wc > 0) }'; then
     echo "WARNING: w_tech=0,w_cc>0 is a diagnostic mixture, not a pure CC-only branch."
@@ -128,7 +137,7 @@ while IFS=$'\t' read -r VIOCF_LABEL VIOCF_MIDI_DIR VIOCF_W_TECH VIOCF_W_CC VIOCF
     [[ -n "$(find "${VIOCF_JOB_RUN_DIR}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
     if bash "${VIOCF_ROOT}/scripts/verify_violet_run.sh" \
       "${VIOCF_JOB_RUN_DIR}" "${VIOCF_MIDI_DIR}" \
-      "${VIOCF_W_TECH}" "${VIOCF_W_CC}"; then
+      "${VIOCF_W_TECH}" "${VIOCF_W_CC}" "${VIOCF_SAMPLER_STEPS}"; then
       echo "[${VIOCF_LABEL}] already complete; skipping."
       continue
     fi
@@ -138,19 +147,20 @@ while IFS=$'\t' read -r VIOCF_LABEL VIOCF_MIDI_DIR VIOCF_W_TECH VIOCF_W_CC VIOCF
   fi
 
   if [[ "${VIOCF_SWEEP_DRY_RUN}" == "true" ]]; then
-    echo "DRY RUN: VIOCF_MIDI_DIR_OVERRIDE=${VIOCF_MIDI_DIR} VIOCF_W_TECH=${VIOCF_W_TECH} VIOCF_W_CC=${VIOCF_W_CC} VIOCF_RUN_ID=${VIOCF_JOB_RUN_ID} scripts/run_violet.sh sweep"
+    echo "DRY RUN: VIOCF_MIDI_DIR_OVERRIDE=${VIOCF_MIDI_DIR} VIOCF_W_TECH=${VIOCF_W_TECH} VIOCF_W_CC=${VIOCF_W_CC} VIOCF_SAMPLER_STEPS=${VIOCF_SAMPLER_STEPS} VIOCF_RUN_ID=${VIOCF_JOB_RUN_ID} scripts/run_violet.sh sweep"
     continue
   fi
 
   VIOCF_MIDI_DIR_OVERRIDE="${VIOCF_MIDI_DIR}" \
   VIOCF_W_TECH="${VIOCF_W_TECH}" \
   VIOCF_W_CC="${VIOCF_W_CC}" \
+  VIOCF_SAMPLER_STEPS="${VIOCF_SAMPLER_STEPS}" \
   VIOCF_RUN_ID="${VIOCF_JOB_RUN_ID}" \
     bash "${VIOCF_ROOT}/scripts/run_violet.sh" sweep
 
   bash "${VIOCF_ROOT}/scripts/verify_violet_run.sh" \
     "${VIOCF_JOB_RUN_DIR}" "${VIOCF_MIDI_DIR}" \
-    "${VIOCF_W_TECH}" "${VIOCF_W_CC}"
+    "${VIOCF_W_TECH}" "${VIOCF_W_CC}" "${VIOCF_SAMPLER_STEPS}"
 done <<< "${VIOCF_PLAN}"
 
 echo "Sweep phase complete: ${VIOCF_SWEEP_PHASE}"

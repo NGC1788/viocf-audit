@@ -26,10 +26,11 @@
   링크하는데 그건 401 이라 막힌 것처럼 보인다. 실제 가중치는 `models/` 레포에 게이팅 없이 있다.
   (2026-08-26 확인: `api/datasets/User-tian/VIOLET` → 401 / `api/models/User-tian/VIOLET` → 200, gated=False)
   ```bash
-  huggingface-cli download User-tian/VIOLET --local-dir checkpoints/
-  #  pretrained_checkpoint/ema_snapshots/ema_prof_99515   581 MB
-  #  dacvae_ft/weights.pth                                431 MB
+  bash scripts/download_violet_checkpoints.sh
+  #  pretrained_checkpoint/ema_snapshots/ema_prof_99515   581,281,166 B
+  #  dacvae_ft/weights.pth                                430,800,929 B
   ```
+  크기와 SHA-256 을 대조하고 runner 가 읽는 `vendor/VIOLET/checkpoints` 에 놓는다.
   → 저자에게 접근 요청 메일을 보낼 필요가 없다. `docs/VIOLET_ACCESS_REQUEST.txt` 는
   레포가 실제로 비공개로 바뀌었을 때만 쓴다.
 - 체크포인트와 DACVAE를 실제로 내려받기 전에는 VIOLET 실험을 성공했다고 간주하지 않는다.

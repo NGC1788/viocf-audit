@@ -38,12 +38,12 @@ class ExperimentConfig:
 
     @property
     def real_techniques(self) -> dict[str, int]:
-        """사람이 실제로 녹음할 주법만. 모델은 더 많은 주법을 감사받는다.
+        """실악기 반사실 기준선이 존재하는 주법만 반환한다.
 
         모델 축과 실연주 축을 분리하지 않으면, 주법을 하나 늘릴 때마다
         연주자가 켜야 할 테이크가 216개씩(12프롬프트x3강약x3악기x2회) 늘어난다.
-        아마추어가 반복 가능한 4개만 녹음하고, 나머지 주법은
-        **모델 vs 가상악기** 비교로만 감사한다(실악기 기준선이 없는 축).
+        아마추어가 반복 가능한 주법만 primary audit에 넣는다. 나머지는
+        실악기 기준선이 없는 generator-only 탐색 축이며 primary 결론에 쓰지 않는다.
         """
         requested = self.raw.get("real", {}).get("techniques")
         if not requested:
@@ -53,6 +53,14 @@ class ExperimentConfig:
         if missing:
             raise ValueError(f"real.techniques 에 techniques 에 없는 주법: {missing}")
         return {str(name): allowed[str(name)] for name in requested}
+
+    def model_techniques_for_profile(self, profile: str) -> dict[str, int]:
+        """Pilot/full은 실악기 대응 주법만, expanded만 탐색 주법까지 사용한다."""
+        if profile == "expanded":
+            return self.techniques
+        if profile in {"pilot", "full"}:
+            return self.real_techniques
+        raise ValueError("profile must be one of: pilot, full, expanded")
 
     @property
     def full_violin_prompts(self) -> int:

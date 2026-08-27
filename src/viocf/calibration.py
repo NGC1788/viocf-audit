@@ -62,6 +62,8 @@ def fit_technique_calibration(
     if not frames:
         raise ValueError("At least one feature CSV is required")
     data = pd.concat(frames, ignore_index=True, sort=False)
+    if "analysis_tier" in data.columns:
+        data = data.loc[data["analysis_tier"].eq("real_counterfactual_primary")].copy()
     if feature not in data:
         raise ValueError(f"Calibration feature is missing: {feature}")
     response = _relative_response(data, feature, baseline_cc=baseline_cc)
@@ -202,7 +204,10 @@ def fit_technique_calibration(
 def _lookup_corrected(mapping: pd.DataFrame, technique: str, desired_cc: int) -> int:
     subset = mapping.loc[mapping["technique"].eq(technique)].sort_values("desired_cc1")
     if subset.empty:
-        return int(desired_cc)
+        raise ValueError(
+            f"No fitted calibration curve for technique={technique!r}; "
+            "refusing to label an identity mapping as calibrated"
+        )
     corrected = np.interp(
         float(desired_cc),
         subset["desired_cc1"].to_numpy(dtype=float),
@@ -285,4 +290,3 @@ def apply_calibration_to_manifest(
     path.parent.mkdir(parents=True, exist_ok=True)
     output.to_csv(path, index=False)
     return output
-

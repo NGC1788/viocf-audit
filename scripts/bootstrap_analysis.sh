@@ -32,4 +32,4 @@ PY
 
 echo
 echo "Analysis environment ready: ${VIOCF_ROOT}/.venv"
-echo "Next: read TODAY.md and request the VIOLET checkpoint before full recording."
+echo "Next: read TODAY.md, then run scripts/download_violet_checkpoints.sh."

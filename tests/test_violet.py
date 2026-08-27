@@ -23,6 +23,7 @@ def _write_fake_run(tmp_path: Path, *, second_seed: int = 1234) -> tuple[Path, P
                 "seed": 1234,
                 "w_tech": 0.5,
                 "w_cc": 2.0,
+                "sampling_steps": 30,
                 "audio_path": f"data/model_audio/{clip_id}.wav",
             }
             for clip_id in clips
@@ -43,6 +44,7 @@ def _write_fake_run(tmp_path: Path, *, second_seed: int = 1234) -> tuple[Path, P
                 "render_attempt": 1,
                 "effective_w_tech": 0.5,
                 "effective_w_cc": 2.0,
+                "effective_sampling_steps": 30,
             }
         )
     with (run / "conditioning_debug.jsonl").open("w", encoding="utf-8") as handle:
@@ -60,6 +62,7 @@ def test_collector_accepts_manifest_expected_guidance_weights(tmp_path: Path) ->
     assert frame["render_seed_matches_expected"].all()
     assert frame["w_tech_matches_expected"].all()
     assert frame["w_cc_matches_expected"].all()
+    assert frame["sampling_steps_match_expected"].all()
     assert groups["pairing_pass"].all()
     assert summary["all_pass"] is True
 
@@ -71,4 +74,18 @@ def test_collector_rejects_a_condition_specific_seed(tmp_path: Path) -> None:
     groups = pd.read_csv(report.with_name("collect_groups.csv"))
     summary = json.loads(report.with_suffix(".summary.json").read_text(encoding="utf-8"))
     assert not groups["pairing_pass"].all()
+    assert summary["all_pass"] is False
+
+
+def test_collector_rejects_wrong_sampler_steps(tmp_path: Path) -> None:
+    project, run, manifest = _write_fake_run(tmp_path)
+    debug_path = run / "test_samples" / "conditioning_debug.jsonl"
+    records = [json.loads(line) for line in debug_path.read_text(encoding="utf-8").splitlines()]
+    records[1]["effective_sampling_steps"] = 16
+    debug_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    report = tmp_path / "collect.csv"
+    collect_violet_run(run, manifest, project, report, copy_audio=False)
+    summary = json.loads(report.with_suffix(".summary.json").read_text(encoding="utf-8"))
     assert summary["all_pass"] is False

@@ -6,7 +6,8 @@ note_onset_seconds: 0.75
 tempo_bpm: 96
 
 # 모델이 감사받는 주법. keyswitch 번호는 VIOLET configs/ks_config.yaml 원본과 대조 확인함.
-# 앞 4개는 실연주 기준선이 있고(real.techniques), 뒤 4개는 모델 vs 가상악기 비교로만 감사한다.
+# 앞 4개는 실연주 기준선이 있다(real.techniques). 뒤 4개는 expanded/sweep에서만 쓰는
+# generator-only 탐색 축이며, 실악기 기준선이 없으므로 primary 결론에는 사용하지 않는다.
 techniques:
   sustain: 36
   staccato: 40

@@ -12,12 +12,18 @@ VIOCF_RUN_ID="${VIOCF_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 VIOCF_RUN_DIR="${VIOCF_ROOT}/logs/violet/${VIOCF_PROFILE}/${VIOCF_RUN_ID}"
 VIOCF_W_TECH="${VIOCF_W_TECH:-1.0}"
 VIOCF_W_CC="${VIOCF_W_CC:-1.0}"
+VIOCF_SAMPLER_STEPS="${VIOCF_SAMPLER_STEPS:-30}"
 VIOCF_CUDA_VISIBLE_DEVICES="${VIOCF_CUDA_VISIBLE_DEVICES:-0}"
 VIOCF_SAVE_DEBUG_BRANCHES="${VIOCF_SAVE_DEBUG_BRANCHES:-false}"
 
 if [[ ! "${VIOCF_W_TECH}" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
   [[ ! "${VIOCF_W_CC}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "VIOCF_W_TECH and VIOCF_W_CC must be non-negative numbers."
+  exit 2
+fi
+if [[ ! "${VIOCF_SAMPLER_STEPS}" =~ ^[0-9]+$ ]] ||
+  [[ "${VIOCF_SAMPLER_STEPS}" -lt 2 ]]; then
+  echo "VIOCF_SAMPLER_STEPS must be an integer of at least 2."
   exit 2
 fi
 if [[ "${VIOCF_SAVE_DEBUG_BRANCHES}" != "true" && "${VIOCF_SAVE_DEBUG_BRANCHES}" != "false" ]]; then
@@ -69,6 +75,7 @@ echo "Run directory: ${VIOCF_RUN_DIR}"
 echo "MIDI directory: ${VIOCF_MIDI_DIR}"
 echo "MIDI files: ${VIOCF_MIDI_COUNT}"
 echo "Guidance: w_tech=${VIOCF_W_TECH}, w_cc=${VIOCF_W_CC}"
+echo "Sampler steps: ${VIOCF_SAMPLER_STEPS}"
 echo "Debug branch audio: ${VIOCF_SAVE_DEBUG_BRANCHES}"
 
 CUDA_VISIBLE_DEVICES="${VIOCF_CUDA_VISIBLE_DEVICES}" python src/eval.py \
@@ -76,6 +83,7 @@ CUDA_VISIBLE_DEVICES="${VIOCF_CUDA_VISIBLE_DEVICES}" python src/eval.py \
   data=eval_midi "data.data_dir=${VIOCF_MIDI_DIR}" \
   data.batch_size=1 data.num_workers=0 \
   "seed=${VIOCF_BASE_SEED}" \
+  "sampler_steps=${VIOCF_SAMPLER_STEPS}" \
   "sampler_w_tech=${VIOCF_W_TECH}" "sampler_w_cc=${VIOCF_W_CC}" \
   '+model.test_noise_group_delimiter=__' \
   +model.test_max_render_attempts=1 \

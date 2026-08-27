@@ -163,6 +163,7 @@ def test_surrogate_trains_each_target_with_grouped_cv(tmp_path: Path) -> None:
     assert predictions.loc[predictions["target"].eq("rms_dbfs")].shape[0] == 72
     assert predictions.loc[predictions["target"].eq("spectral_centroid_hz")].shape[0] == 60
     assert outputs["importance"].exists()
+    assert "sampling_steps" in artifact["metadata"]["numeric_predictors"]
 
 
 def test_surrogate_accepts_a_single_target_string(tmp_path: Path) -> None:
@@ -178,3 +179,19 @@ def test_surrogate_accepts_a_single_target_string(tmp_path: Path) -> None:
     )
     metadata = json.loads(outputs["metadata"].read_text(encoding="utf-8"))
     assert metadata["targets_trained"] == ["rms_dbfs"]
+
+
+def test_sampler_step_shell_pipeline_is_wired_end_to_end() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = (root / "scripts" / "run_compute_sweep.sh").read_text(encoding="utf-8")
+    violet = (root / "scripts" / "run_violet.sh").read_text(encoding="utf-8")
+    collector = (root / "scripts" / "collect_compute_sweep.sh").read_text(encoding="utf-8")
+    analyzer = (root / "scripts" / "analyze_compute_sweep.sh").read_text(encoding="utf-8")
+    patch = (root / "patches" / "violet_counterfactual_noise.patch").read_text(encoding="utf-8")
+
+    assert '"${VIOCF_SWEEP_PHASE}" != "steps"' in runner
+    assert 'glob("steps_n*.csv")' in runner
+    assert '"sampler_steps=${VIOCF_SAMPLER_STEPS}"' in violet
+    assert '"effective_sampling_steps"' in patch
+    assert 'steps_n*.csv' in collector
+    assert 'steps_features.csv' in analyzer

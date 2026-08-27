@@ -5,6 +5,8 @@
   "real_takes": 48,
   "delayed_model_clips": 12,
   "delayed_real_takes": 12,
+  "primary_model_clips": 48,
+  "exploratory_model_clips": 0,
   "midi_files": 90,
   "invalid_midi": [],
   "critical_note": "Do not record the full design until the pilot and VIOLET smoke test pass."

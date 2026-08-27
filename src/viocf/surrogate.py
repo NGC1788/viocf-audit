@@ -28,7 +28,7 @@ DEFAULT_TARGETS = (
     "active_duration_s",
 )
 CATEGORICAL_PREDICTORS = ("technique", "pattern", "register", "timing_variant")
-NUMERIC_PREDICTORS = ("cc1_final", "w_tech", "w_cc")
+NUMERIC_PREDICTORS = ("cc1_final", "w_tech", "w_cc", "sampling_steps")
 
 
 def _load_feature_tables(paths: Iterable[str | Path]) -> pd.DataFrame:
@@ -59,6 +59,8 @@ def _prepare_predictors(data: pd.DataFrame) -> pd.DataFrame:
     for column in ("w_tech", "w_cc"):
         if column not in prepared:
             prepared[column] = 1.0
+    if "sampling_steps" not in prepared:
+        prepared["sampling_steps"] = 30
     for column in CATEGORICAL_PREDICTORS:
         prepared[column] = prepared[column].fillna("unknown").astype(str)
     for column in NUMERIC_PREDICTORS:

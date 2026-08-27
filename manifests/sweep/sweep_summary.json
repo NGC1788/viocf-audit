@@ -1,7 +1,8 @@
 {
   "dense_clips": 6912,
   "guidance_clips": 4608,
-  "total_clips": 11520,
+  "steps_clips": 3456,
+  "total_clips": 14976,
   "expanded_prompt_count": 24,
   "dense_cc1_levels": [
     8,
@@ -31,5 +32,27 @@
   ],
   "guidance_replicates": 4,
   "guidance_pair_manifests": 16,
+  "sampling_step_levels": [
+    8,
+    16,
+    30,
+    50,
+    80,
+    120
+  ],
+  "steps_replicates": 8,
+  "techniques": [
+    "sustain",
+    "staccato",
+    "pizzicato",
+    "legato_slur"
+  ],
+  "include_exploratory_techniques": false,
+  "primary_techniques": [
+    "sustain",
+    "staccato",
+    "pizzicato",
+    "legato_slur"
+  ],
   "critical_note": "Run only after the pilot gates and official VIOLET smoke test pass."
 }

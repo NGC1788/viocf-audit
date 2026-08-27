@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import warnings
@@ -291,6 +292,12 @@ def _split_half_floor(real: np.ndarray, seed: int, repeats: int = 25) -> float:
     return float(np.median(values)) if values else 0.0
 
 
+def _stable_key_seed(key: object) -> int:
+    """Return a process-independent seed (Python's hash() is randomized)."""
+    digest = hashlib.blake2b(repr(key).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "little") & ((1 << 63) - 1)
+
+
 def compositionality_gap(interactions: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for key, group in interactions.groupby(["technique", "dynamic_label", "interaction"], dropna=False):
@@ -311,7 +318,7 @@ def compositionality_gap(interactions: pd.DataFrame, features: Sequence[str]) ->
         # 유한표본 noise floor: 완벽한 모델이라도 표본이 유한하면 거리가 0이 아니다.
         # ⚠ 행 순서를 그대로 반으로 가르면 (예: 앞=V1/V2, 뒤=V3) floor 에 악기 차이가
         # 섞여 들어가 gap 을 과소평가한다. 무작위 분할을 여러 번 해서 중앙값을 쓴다.
-        human_floor = _split_half_floor(y, seed=abs(hash(str(key))) % (2**31))
+        human_floor = _split_half_floor(y, seed=_stable_key_seed(key))
         records.append(
             {
                 "technique": key[0],
@@ -498,6 +505,11 @@ def run_metric_suite(
         raise ValueError("At least one feature CSV is required")
     data = pd.concat(frames, ignore_index=True, sort=False)
     data = data.loc[data.get("feature_error", pd.Series(index=data.index, dtype=object)).isna()]
+    if "analysis_tier" in data.columns:
+        # Real-instrument comparisons are only identified for conditions with
+        # a matched real counterfactual. Generator-only rows remain available
+        # to the sweep surrogate, but cannot silently enter headline metrics.
+        data = data.loc[data["analysis_tier"].eq("real_counterfactual_primary")].copy()
     requested = [str(value) for value in config["analysis"]["response_features"]]
     features = [name for name in requested if name in data.columns]
     standardized, scales = standardize_for_response(data, features)

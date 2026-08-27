@@ -127,6 +127,11 @@ def _manifest_row(
         "register": prompt.register,
         "timing_variant": prompt.prompt_id.rsplit("_", maxsplit=1)[-1],
         "technique": technique,
+        "analysis_tier": (
+            "real_counterfactual_primary"
+            if technique in config.real_techniques
+            else "generator_only_exploratory"
+        ),
         "technique_keyswitch": keyswitch,
         "dynamic_label": dynamic_label,
         "cc1_initial": cc1,
@@ -144,8 +149,14 @@ def _manifest_row(
             # 나중에 여러 스윕을 합칠 때 열이 어긋나지 않게 한다.
             else int(config.raw["model"].get("sampling_steps", 30))
         ),
-        "reference_midi": prompt.reference_midi,
-        "single_pitch": prompt.single_pitch,
+        "reference_midi": (
+            prompt.reference_midi
+            if technique not in {"trill_major", "trill_minor"}
+            else float("nan")
+        ),
+        "single_pitch": bool(
+            prompt.single_pitch and technique not in {"trill_major", "trill_minor"}
+        ),
         "note_onset_s": config.note_onset_seconds,
         "midi_path": _relative(midi_path, root),
         "audio_path": f"data/model_audio/sweep/{clip_id}.wav",
@@ -208,19 +219,22 @@ def create_compute_sweep(
     dense_replicates: int = DEFAULT_DENSE_REPLICATES,
     guidance_replicates: int = DEFAULT_GUIDANCE_REPLICATES,
     steps_replicates: int = DEFAULT_STEPS_REPLICATES,
+    include_exploratory_techniques: bool = False,
 ) -> dict[str, Path]:
-    """Create the post-pilot dense-CC1 and guidance-weight compute sweeps.
+    """Create post-pilot CC1, guidance, and sampler-step sweeps.
 
-    The default design contains 6,912 dense response clips and 4,608
-    guidance-ablation clips. Every technique/dynamics cell in a
-    prompt/replicate block shares the filename prefix and deterministic seed.
+    By default only techniques with a real-instrument counterfactual baseline
+    are included. The other configured techniques can be added explicitly as
+    generator-only exploratory analyses; they must not enter primary claims.
     """
+    techniques = (
+        config.techniques if include_exploratory_techniques else config.real_techniques
+    )
     planned_sweep_counts(
         dense_replicates, guidance_replicates, steps_replicates,
-        technique_count=len(config.techniques), dynamics_count=len(config.dynamics),
+        technique_count=len(techniques), dynamics_count=len(config.dynamics),
     )
     root = project_root_from_config(config)
-    techniques = config.techniques
     prompts = expanded_prompts(config)
     default_w_tech = float(config.raw["model"]["w_tech"])
     default_w_cc = float(config.raw["model"]["w_cc"])
@@ -354,6 +368,9 @@ def create_compute_sweep(
         "guidance_pair_manifests": len(guidance_manifests),
         "sampling_step_levels": list(SAMPLING_STEP_LEVELS),
         "steps_replicates": steps_replicates,
+        "techniques": list(techniques),
+        "include_exploratory_techniques": bool(include_exploratory_techniques),
+        "primary_techniques": list(config.real_techniques),
         "critical_note": "Run only after the pilot gates and official VIOLET smoke test pass.",
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
