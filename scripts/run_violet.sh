@@ -51,7 +51,8 @@ if [[ ! -d "${VIOCF_MIDI_DIR}" ]]; then
   echo "Missing MIDI directory: ${VIOCF_MIDI_DIR}"
   exit 2
 fi
-VIOCF_MIDI_COUNT="$(find "${VIOCF_MIDI_DIR}" -type f \( -name '*.mid' -o -name '*.midi' \) | wc -l | tr -d ' ')"
+# -L 로 심볼릭 링크를 따라간다. 없으면 링크된 MIDI 를 0개로 세어 "No MIDI files found" 로 죽는다.
+VIOCF_MIDI_COUNT="$(find -L "${VIOCF_MIDI_DIR}" -type f \( -name '*.mid' -o -name '*.midi' \) | wc -l | tr -d ' ')"
 if [[ "${VIOCF_MIDI_COUNT}" -eq 0 ]]; then
   echo "No MIDI files found under: ${VIOCF_MIDI_DIR}"
   exit 2

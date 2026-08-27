@@ -6,7 +6,7 @@
 # 편집기 재시작·크래시만으로도 그 일이 벌어진다.
 #
 # 프롬프트마다 따로 돌리면 죽어도 20~30분치만 잃는다.
-# 원본 MIDI 디렉터리 구조는 건드리지 않는다 — 프롬프트별 심볼릭 링크 디렉터리를
+# 원본 MIDI 디렉터리 구조는 건드리지 않는다 — 프롬프트별 하드링크 디렉터리를
 # 임시로 만들어 VIOCF_MIDI_DIR_OVERRIDE 로 넘긴다.
 #
 # 사용: scripts/run_profile_chunked.sh {pilot|full|expanded}
@@ -28,12 +28,13 @@ esac
 mkdir -p "${VIOCF_STAGE_DIR}" "$(dirname "${VIOCF_STATE}")"
 touch "${VIOCF_STATE}"
 
-# 프롬프트별로 MIDI 를 모아 심볼릭 링크 디렉터리를 만들고 계획을 출력한다.
+# 프롬프트별로 MIDI 를 모아 하드링크 디렉터리를 만들고 계획을 출력한다.
 VIOCF_PLAN="$({ python3 - \
   "${VIOCF_ROOT}" "${VIOCF_PROFILE}" "${VIOCF_STAGE_DIR}" <<'PY'
 from __future__ import annotations
 
 import csv
+import os
 import shutil
 import sys
 from collections import defaultdict
@@ -78,7 +79,16 @@ for key, paths in sorted(groups.items()):
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
     for path in paths:
-        (stage / path.name).symlink_to(path)
+        target = stage / path.name
+        # ⚠ 심볼릭 링크를 쓰면 안 된다.
+        # run_violet.sh 의 개수 확인이 `find -type f` 인데 심볼릭 링크는 -type l 이라
+        # 세지 않는다 -> 768개를 만들어 두고 "No MIDI files found" 로 죽는다(실제로 겪음).
+        # 하드 링크는 일반 파일과 구분되지 않으므로 하위 도구가 전부 그대로 동작한다.
+        # 같은 파일시스템이 아니면(드묾) 복사로 물러난다.
+        try:
+            os.link(path, target)
+        except OSError:
+            shutil.copy2(path, target)
     print(f"{key}\t{stage}\t{len(paths)}")
 PY
 } 2>&1)" || {
