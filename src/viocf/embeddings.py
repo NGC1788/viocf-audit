@@ -27,6 +27,10 @@ MERT 는 음악 오디오로 자기지도 학습된 표현이다. 우리가 무�
   torch < 2.6 에서 `torch.load` 를 거부한다. **분석용 venv 의 torch 를 올려야 한다.**
 - 첫 실행 때 모델을 내려받는다(95M 은 약 0.4 GB). 오프라인 서버면 미리 캐시할 것.
 - `trust_remote_code=True` 가 필요하다. MERT 는 저장소에 커스텀 모델 코드를 함께 둔다.
+- **`transformers` 는 4.x 로 상한을 건다.** MERT 의 원격 코드는 4.x 시절 것이라
+  5.x 에서는 forward 가 `output_hidden_states` 를 받기만 하고 채우지 않아
+  `hidden_states` 가 None 으로 온다(실측: 4.57.6 정상 / 5.16.1 실패).
+  이 모듈에 forward hook 대비책이 있지만 정상 경로를 쓰는 편이 안전하다.
 """
 
 from __future__ import annotations
@@ -93,14 +97,45 @@ class MertEmbedder:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         self.model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        # ⚠ transformers 5.x + MERT 의 커스텀 원격코드 조합에서는 forward 의
+        # output_hidden_states=True 가 전달되지 않아 hidden_states 가 None 으로 온다.
+        # 설정에 직접 박아야 한다(실측으로 확인).
+        self.model.config.output_hidden_states = True
         self.model.eval().to(device)
+        self._captured: list[Any] = []
+        self._install_layer_hooks()
         self.extractor = Wav2Vec2FeatureExtractor.from_pretrained(
             model_id, trust_remote_code=True
         )
         self.sample_rate = int(self.extractor.sampling_rate)
 
+    def _install_layer_hooks(self) -> None:
+        """중간 레이어를 forward hook 으로 직접 낚아챈다.
+
+        왜 필요한가: MERT 의 원격 모델 코드는 transformers 4.x 시절에 쓰였다.
+        transformers 5.x 에서는 forward 가 `output_hidden_states` 인자를 **받기는 하지만
+        채우지 않아서** `outputs.hidden_states` 가 None 으로 온다(실측 확인).
+        훅은 모델이 무엇을 반환하든 무관하게 동작하므로 버전 변화에 견딘다.
+
+        transformers 4.x 를 쓰면 정상 경로가 동작하고 훅 결과는 무시된다.
+        """
+        encoder = getattr(self.model, "encoder", None)
+        layers = getattr(encoder, "layers", None) if encoder is not None else None
+        if layers is None:
+            return
+
+        def make_hook(index: int):
+            def hook(_module, _inputs, output):
+                tensor = output[0] if isinstance(output, (tuple, list)) else output
+                self._captured.append((index, tensor.detach()))
+            return hook
+
+        for index, layer in enumerate(layers):
+            layer.register_forward_hook(make_hook(index))
+
     def embed(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
         torch = self._torch
+        self._captured = []
         if sample_rate != self.sample_rate:
             import librosa
 
@@ -117,8 +152,20 @@ class MertEmbedder:
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with torch.no_grad():
             outputs = self.model(**inputs, output_hidden_states=True)
+        hidden = getattr(outputs, "hidden_states", None)
+        if hidden is None:
+            # 훅으로 직접 낚아챈 것을 쓴다 (아래 _install_layer_hooks 주석 참조)
+            hidden = self._captured or None
+        if hidden is None:
+            raise RuntimeError(
+                "MERT 의 중간 레이어를 얻지 못했다. transformers 버전을 확인할 것 "
+                "(4.x 권장). 훅 경로도 실패했다면 모델 구조가 바뀐 것이다."
+            )
+        if isinstance(hidden, list) and hidden and isinstance(hidden[0], tuple):
+            # 훅 경로: (레이어번호, 텐서) 목록 -> 레이어 순으로 정렬
+            hidden = [tensor for _, tensor in sorted(hidden, key=lambda pair: pair[0])]
         # hidden_states: (레이어, 배치, 프레임, 차원)
-        stacked = torch.stack(outputs.hidden_states).squeeze(1)
+        stacked = torch.stack(list(hidden)).squeeze(1)
         n_layers = stacked.shape[0]
         chosen = [layer for layer in self.layers if 0 <= layer < n_layers]
         if not chosen:
@@ -295,4 +342,4 @@ __all__ = [
     "summarise",
 ]
 
-assert math  # noqa: S101 - 상단 import 유지용
+assert math
