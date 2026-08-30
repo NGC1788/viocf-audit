@@ -144,6 +144,7 @@ def main() -> int:
         if 0 < silent_count < len(cell):
             for _, record in cell.iterrows():
                 mixed_rows.append({
+                    "group_key": f"{technique}/{noise_group}",
                     "technique": technique,
                     "dynamic_label": record.get("dynamic_label"),
                     "survived": not bool(record["silent_absolute"]),
@@ -167,6 +168,25 @@ def main() -> int:
             spread = float(overall["mean"].max() - overall["mean"].min())
             best = str(overall["mean"].idxmax())
             print(f"  생존율 차이 {spread:.3f} — 가장 잘 살아남는 강약: {best}")
+
+            # 눈으로 보고 '계통적'이라 하면 안 된다. 귀무가설을 세워 확률을 낸다.
+            # H0: 섞인 그룹에서 어느 클립이 살아남는지가 강약과 무관하다
+            #     (= 그룹마다 균등하게 아무거나 하나).
+            per_group = mixed.groupby("group_key")["survived"].sum()
+            single_survivor = per_group.eq(1)
+            if single_survivor.all() and len(per_group) >= 3:
+                counts = mixed.loc[mixed["survived"], "dynamic_label"].value_counts()
+                top_label, top_count = str(counts.index[0]), int(counts.iloc[0])
+                n_groups, n_labels = len(per_group), len(overall)
+                # 어느 한 강약이 n_groups 회 모두 이길 확률 (라벨 수만큼 경우가 있다)
+                p_value = float(n_labels * (1.0 / n_labels) ** n_groups)
+                print(f"  섞인 그룹 {n_groups}개가 모두 생존자 1개이고, "
+                      f"그 중 {top_count}개가 '{top_label}' 다")
+                print(f"  H0(강약 무관, 균등) 하에서 한 강약이 {n_groups}회 모두 "
+                      f"이길 확률 p = {p_value:.5f}")
+                if p_value >= 0.05:
+                    print("  ⚠ 표본이 작아 유의하지 않다. 경향으로만 적을 것.")
+
             if spread >= 0.34:
                 print("  -> 강약에 따라 생존이 갈린다. 무음이 latent 만의 문제가 아니라")
                 print("     조건과 상호작용한다. 이건 그 자체로 보고할 결과다.")

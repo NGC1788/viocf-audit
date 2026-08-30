@@ -256,3 +256,84 @@ def test_dip_threshold_has_a_valid_plateau(tmp_path: Path) -> None:
         assert len(separated) >= 3
     finally:
         feature_module.DIP_PROMINENCE_DB = original
+
+
+def test_prebranch_window_is_anchored_to_notated_time(tmp_path):
+    """분기 전 구간은 **악보 시각**에 걸려야 한다.
+
+    검출된 onset 에 창을 걸면, onset 검출이 조건마다 흔들릴 때 창 자체가 움직인다.
+    그러면 '분기 전이 다르다'가 진짜 소리 차이인지 다른 구간을 비교한 탓인지
+    구분되지 않는다. 이 저장소의 핵심 주장(비인과적 누출)이 그 지표에 걸려 있으므로
+    그 모호함을 남길 수 없다.
+
+    분기 전 오디오를 **비트 단위로 동일**하게 만들고 일부 조건에만 짧은 선행
+    신호를 넣어 onset 검출을 흔든다. 참값은 spread = 0 이다.
+    """
+    import numpy as np
+    import pandas as pd
+    import soundfile as sf
+
+    from viocf.features import extract_manifest_features
+
+    rate = CONFIG["sample_rate"]
+    onset, branch_offset = 0.75, 0.25
+    length = int(rate * 3.0)
+    rng = np.random.default_rng(2024)
+    shared_noise = rng.normal(0, 1, length)  # 모든 조건이 같은 잡음을 쓴다
+
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    records = []
+    for dynamic, post_gain, add_blip in (("p", 0.3, False), ("mf", 1.0, True), ("f", 3.0, True)):
+        samples = shared_noise * 10 ** (-88 / 20)
+        start, branch = int(rate * onset), int(rate * (onset + branch_offset))
+        pre_times = np.arange(branch - start) / rate
+        # 분기 전: 세 조건이 완전히 동일
+        samples[start:branch] += np.sin(2 * np.pi * 440 * pre_times) * 10 ** (-18 / 20)
+        post_times = np.arange(length - branch) / rate
+        # 분기 후: 조건마다 다르다 (실제 실험과 같은 구조)
+        samples[branch:] += (
+            np.sin(2 * np.pi * 440 * post_times) * 10 ** (-18 / 20) * post_gain
+        )
+        if add_blip:
+            # onset 검출을 앞으로 끌어당기는 아주 짧은 선행 신호
+            blip = int(rate * 0.60)
+            samples[blip : blip + int(rate * 0.01)] += 0.02
+        path = audio_dir / f"{dynamic}.wav"
+        sf.write(path, samples.astype(np.float32), rate)
+        records.append({
+            "clip_id": dynamic,
+            "audio_path": str(path),
+            "profile": "delayed",
+            "source": "model",
+            "prompt_id": "delayed_A4",
+            "technique": "sustain",
+            "dynamic_label": dynamic,
+            "noise_group": "g0",
+            "note_onset_s": onset,
+            "branch_offset_s": branch_offset,
+            "midi_pitch": 69,
+        })
+    manifest = tmp_path / "manifest.csv"
+    pd.DataFrame(records).to_csv(manifest, index=False)
+
+    frame = extract_manifest_features(
+        manifest, tmp_path / "features.csv", tmp_path, CONFIG, workers=1
+    )
+
+    # blip 이 실제로 onset 검출을 흔들었는지 먼저 확인한다.
+    # 안 흔들렸다면 이 테스트는 아무것도 검증하지 못한다.
+    assert frame["onset_time_s"].nunique() > 1, (
+        "onset 검출이 흔들리지 않아 대조가 성립하지 않는다"
+    )
+
+    absolute_spread = float(np.ptp(frame["prebranch_abs_rms_dbfs"].dropna().to_numpy()))
+    detected_spread = float(np.ptp(frame["prebranch_rms_dbfs"].dropna().to_numpy()))
+
+    assert absolute_spread < 0.01, (
+        f"분기 전이 동일한데 악보 시각 기준 spread 가 {absolute_spread:.4f} dB 다"
+    )
+    # 검출 기준이 가짜 누출을 만든다는 것 자체를 고정해 둔다 — 이게 이 수정의 이유다.
+    assert detected_spread > 1.0, (
+        "검출 onset 기준이 가짜 누출을 만들지 않는다면 이 테스트의 전제가 바뀐 것이다"
+    )

@@ -393,6 +393,38 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
         )
 
     branch_offset = _safe_float(metadata.get("branch_offset_s"))
+
+    # ⚠ 인과성 검정용으로는 **악보상 시각**에 창을 걸어야 한다.
+    #
+    # 아래 detected 창은 `onset_time`(검출된 활성 구간 시작)에 걸린다. onset 검출이
+    # 조건마다 흔들리면 창 자체가 움직여서, 분기 전 차이가 '진짜 다른 소리'인지
+    # '다른 구간을 비교한 것'인지 구분되지 않는다. 헤드라인 주장이 걸린 지표라
+    # 그 모호함을 남길 수 없다.
+    #
+    # note_onset_s 와 branch_offset_s 는 manifest 값이라 한 noise_group 안의
+    # p/mf/f 가 **정확히 같다**. 여기에 창을 걸면 모든 조건이 같은 절대 시각을
+    # 본다. 그러면 차이는 오직 오디오의 차이다.
+    notated_onset = _safe_float(metadata.get("note_onset_s"))
+    if np.isfinite(branch_offset) and np.isfinite(notated_onset):
+        notated_branch = notated_onset + branch_offset
+        pre_abs = _segment(
+            samples, sample_rate,
+            notated_onset + 0.04,
+            max(notated_onset + 0.05, notated_branch - 0.02),
+        )
+        pre_abs_spectral = _spectral_features(pre_abs, sample_rate)
+        row.update({
+            "prebranch_abs_rms_dbfs": float(amplitude_to_db(rms(pre_abs))),
+            "prebranch_abs_centroid_hz": pre_abs_spectral["spectral_centroid_hz"],
+            "notated_branch_time_s": notated_branch,
+        })
+    else:
+        row.update({
+            "prebranch_abs_rms_dbfs": math.nan,
+            "prebranch_abs_centroid_hz": math.nan,
+            "notated_branch_time_s": math.nan,
+        })
+
     if np.isfinite(branch_offset) and np.isfinite(onset_time):
         branch_time = onset_time + branch_offset
         pre = _segment(samples, sample_rate, onset_time + 0.04, max(onset_time + 0.05, branch_time - 0.02))

@@ -436,7 +436,17 @@ def delayed_branch_strict_model_leak(frame: pd.DataFrame) -> pd.DataFrame:
     delayed = frame.loc[frame["profile"].eq("delayed") & frame["source"].eq("model")].copy()
     if delayed.empty:
         return pd.DataFrame()
-    features = [name for name in ("prebranch_rms_dbfs", "prebranch_centroid_hz") if name in delayed]
+    # ⚠ 악보 시각 기준(prebranch_abs_*)을 우선한다.
+    # 검출 onset 기준 창은 onset 검출이 흔들리면 창이 함께 움직여서, 차이가
+    # '다른 소리'인지 '다른 구간'인지 구분되지 않는다. 악보 시각은 manifest 값이라
+    # 한 noise_group 안에서 정확히 같으므로 그 모호함이 없다.
+    absolute = [
+        name for name in ("prebranch_abs_rms_dbfs", "prebranch_abs_centroid_hz")
+        if name in delayed
+    ]
+    features = absolute or [
+        name for name in ("prebranch_rms_dbfs", "prebranch_centroid_hz") if name in delayed
+    ]
     if not features:
         return pd.DataFrame()
     if "noise_group" not in delayed.columns:
