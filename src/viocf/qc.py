@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -72,40 +75,109 @@ def qc_audio(path: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _qc_one(job: tuple[int, dict[str, Any], str, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+    """워커 하나가 클립 하나를 검사한다. 실패도 행으로 보존한다."""
+    index, record, audio_path_text, config = job
+    audio_path = Path(audio_path_text)
+    row = dict(record)
+    if not audio_path.exists():
+        row.update({
+            "resolved_audio_path": str(audio_path),
+            "qc_pass": False,
+            "qc_reasons": "missing_audio",
+        })
+        return index, row
+    try:
+        row.update(qc_audio(audio_path, config))
+    except Exception as exc:  # noqa: BLE001 - preserve per-file QC failures
+        row.update({
+            "resolved_audio_path": str(audio_path),
+            "qc_pass": False,
+            "qc_reasons": f"{type(exc).__name__}: {exc}",
+        })
+    return index, row
+
+
+def _default_workers() -> int:
+    # 코어를 다 쓰면 서버가 먹통이 된다. 2개는 남긴다.
+    return max(1, (os.cpu_count() or 2) - 2)
+
+
 def qc_manifest(
     manifest_path: str | Path,
     output_path: str | Path,
     project_root: str | Path,
     config: dict[str, Any],
+    workers: int | None = None,
+    progress_every: int = 1000,
 ) -> pd.DataFrame:
+    """manifest 의 오디오를 전수 검사한다.
+
+    ⚠ 병렬이다. 클립마다 파일 전체를 읽고 **SHA-256 까지 계산**하므로 직렬로는
+    1만 8천 클립에 수십 분이 든다. 그동안 나머지 코어가 논다(실제로 겪음).
+
+    결정성은 유지된다. 검사에 난수가 없고, 결과를 manifest 순서로 되돌린다.
+    워커 수를 바꿔도 출력 파일은 같다.
+    """
     root = Path(project_root).resolve()
     manifest = pd.read_csv(manifest_path)
-    rows: list[dict[str, Any]] = []
-    for record in manifest.to_dict(orient="records"):
+
+    jobs: list[tuple[int, dict[str, Any], str, dict[str, Any]]] = []
+    for index, record in enumerate(manifest.to_dict(orient="records")):
         audio_path = Path(str(record["audio_path"]))
         if not audio_path.is_absolute():
             audio_path = root / audio_path
-        row = dict(record)
-        if not audio_path.exists():
-            row.update(
-                {
-                    "resolved_audio_path": str(audio_path),
-                    "qc_pass": False,
-                    "qc_reasons": "missing_audio",
-                }
+        jobs.append((index, record, str(audio_path), config))
+
+    worker_count = workers if workers is not None else _default_workers()
+    collected: dict[int, dict[str, Any]] = {}
+
+    if worker_count <= 1 or len(jobs) <= 1:
+        for job in jobs:
+            index, row = _qc_one(job)
+            collected[index] = row
+    else:
+        environment = {
+            name: "1"
+            for name in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
             )
-        else:
-            try:
-                row.update(qc_audio(audio_path, config))
-            except Exception as exc:  # noqa: BLE001 - preserve per-file QC failures
-                row.update(
-                    {
-                        "resolved_audio_path": str(audio_path),
-                        "qc_pass": False,
-                        "qc_reasons": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-        rows.append(row)
+        }
+        # spawn 방식에서 자식이 viocf 를 다시 import 해야 한다 (features.py 와 같은 이유).
+        package_root = str(Path(__file__).resolve().parents[1])
+        existing_pythonpath = os.environ.get("PYTHONPATH", "")
+        if package_root not in existing_pythonpath.split(os.pathsep):
+            environment["PYTHONPATH"] = (
+                f"{package_root}{os.pathsep}{existing_pythonpath}"
+                if existing_pythonpath
+                else package_root
+            )
+        previous = {name: os.environ.get(name) for name in environment}
+        os.environ.update(environment)
+        try:
+            with ProcessPoolExecutor(max_workers=worker_count) as pool:
+                for done, (index, row) in enumerate(
+                    pool.map(_qc_one, jobs, chunksize=8), start=1
+                ):
+                    collected[index] = row
+                    if progress_every and done % progress_every == 0:
+                        print(
+                            f"  QC {done:,}/{len(jobs):,} (워커 {worker_count}개)",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    # manifest 순서로 되돌린다 — 워커 수와 무관하게 같은 파일이 나와야 한다.
+    rows = [collected[index] for index in sorted(collected)]
     frame = pd.DataFrame(rows)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)

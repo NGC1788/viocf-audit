@@ -128,7 +128,7 @@ def command_segment(args: argparse.Namespace) -> None:
 
 def command_qc(args: argparse.Namespace) -> None:
     config, root = _config_and_root(args.config)
-    frame = qc_manifest(args.manifest, args.output, root, config.raw)
+    frame = qc_manifest(args.manifest, args.output, root, config.raw, workers=args.workers)
     _json_print(
         {
             "rows": len(frame),
@@ -323,6 +323,10 @@ def build_parser() -> argparse.ArgumentParser:
     qc = subparsers.add_parser("qc", help="Run non-destructive audio QC")
     qc.add_argument("--manifest", required=True)
     qc.add_argument("--output", required=True)
+    qc.add_argument(
+        "--workers", type=int, default=None,
+        help="병렬 워커 수 (기본: 코어수-2). 1 이면 직렬. 결과는 워커 수와 무관하게 동일하다.",
+    )
     qc.set_defaults(func=command_qc)
 
     features = subparsers.add_parser("features", help="Extract interpretable audio features")

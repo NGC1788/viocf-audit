@@ -118,13 +118,21 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
 
   VIOCF_STAGE_START="$(date +%s)"
   VIOCF_STAGE_OK=true
+  # ⚠ 단계별 출력을 파일로 남긴다.
+  # 예전엔 queue.log 에 log() 줄만 들어가서, 단계가 죽어도 **실제 오류 메시지가
+  # 터미널에만 남고 사라졌다**(T6 가 3.8시간 돌고 실패했는데 원인을 볼 수 없었다).
+  # 이제 실패하면 로그 파일 경로와 마지막 줄을 함께 찍는다.
+  VIOCF_STAGE_LOG="${VIOCF_ROOT}/logs/stages/${VIOCF_KEY//:/_}_$(date +%Y%m%d_%H%M%S).log"
+  mkdir -p "$(dirname "${VIOCF_STAGE_LOG}")"
+  exec 3>&1
+  run_stage() { "$@" > >(tee -a "${VIOCF_STAGE_LOG}" >&3) 2> >(tee -a "${VIOCF_STAGE_LOG}" >&3 >&2); }
   case "${VIOCF_KIND}" in
     profile)
       VIOCF_RUN_ID="queue_$(date +%Y%m%d_%H%M%S)"
-      VIOCF_RUN_ID="${VIOCF_RUN_ID}" bash "${VIOCF_ROOT}/scripts/run_violet.sh" "${VIOCF_ARG}" \
+      VIOCF_RUN_ID="${VIOCF_RUN_ID}" run_stage bash "${VIOCF_ROOT}/scripts/run_violet.sh" "${VIOCF_ARG}" \
         || VIOCF_STAGE_OK=false
       if [[ "${VIOCF_STAGE_OK}" == "true" ]]; then
-        bash "${VIOCF_ROOT}/scripts/verify_violet_run.sh" \
+        run_stage bash "${VIOCF_ROOT}/scripts/verify_violet_run.sh" \
           "${VIOCF_ROOT}/logs/violet/${VIOCF_ARG}/${VIOCF_RUN_ID}" \
           "${VIOCF_ROOT}/data/midi/${VIOCF_ARG}/model" \
           || VIOCF_STAGE_OK=false
@@ -132,30 +140,30 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
       ;;
     chunked)
       # 프롬프트 단위로 쪼개 돌린다. 죽어도 20~30분치만 잃는다.
-      bash "${VIOCF_ROOT}/scripts/run_profile_chunked.sh" "${VIOCF_ARG}" \
+      run_stage bash "${VIOCF_ROOT}/scripts/run_profile_chunked.sh" "${VIOCF_ARG}" \
         || VIOCF_STAGE_OK=false
       ;;
     sweep)
-      VIOCF_SWEEP_PHASE="${VIOCF_ARG}" bash "${VIOCF_ROOT}/scripts/run_compute_sweep.sh" \
+      VIOCF_SWEEP_PHASE="${VIOCF_ARG}" run_stage bash "${VIOCF_ROOT}/scripts/run_compute_sweep.sh" \
         || VIOCF_STAGE_OK=false
       ;;
     collect)
       # 생성만 하고 수집을 안 하면 오디오가 logs/violet 안에 남아
       # 뒤 단계가 전부 빈 결과를 낸다. 큐에 명시적 단계로 넣는다.
-      bash "${VIOCF_ROOT}/scripts/collect_compute_sweep.sh" \
+      run_stage bash "${VIOCF_ROOT}/scripts/collect_compute_sweep.sh" \
         || VIOCF_STAGE_OK=false
       ;;
     embed)
       # 학습된 표현(MERT)으로 교차확인한다. 해석가능 특징이 놓친 누출이 있는지,
       # 그리고 우리가 본 누출이 표현공간에서도 보이는지. GPU 를 쓴다.
-      bash "${VIOCF_ROOT}/scripts/run_embeddings.sh" "${VIOCF_ARG}" \
+      run_stage bash "${VIOCF_ROOT}/scripts/run_embeddings.sh" "${VIOCF_ARG}" \
         || VIOCF_STAGE_OK=false
       ;;
     analyze)
       # CPU 단계. GPU 가 비므로 다음 생성 잡과 겹쳐 돌려도 된다.
       # ⚠ 예전엔 run_pilot_analysis.sh 를 불렀는데 그건 pilot manifest 만 본다.
       #    본체(expanded 18,624클립)의 특징 추출 경로가 큐에 아예 없었다.
-      bash "${VIOCF_ROOT}/scripts/run_profile_analysis.sh" "${VIOCF_ARG}" \
+      run_stage bash "${VIOCF_ROOT}/scripts/run_profile_analysis.sh" "${VIOCF_ARG}" \
         || VIOCF_STAGE_OK=false
       ;;
     *)
@@ -163,10 +171,16 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
       exit 2
       ;;
   esac
+  exec 3>&-
   VIOCF_STAGE_SECONDS=$(( $(date +%s) - VIOCF_STAGE_START ))
 
   if [[ "${VIOCF_STAGE_OK}" != "true" ]]; then
     log "  실패: ${VIOCF_KEY} (${VIOCF_STAGE_SECONDS}s)"
+    log "  단계 로그: ${VIOCF_STAGE_LOG}"
+    log "  ── 마지막 25줄 ──"
+    tail -n 25 "${VIOCF_STAGE_LOG}" 2>/dev/null | while IFS= read -r VIOCF_LINE; do
+      log "    ${VIOCF_LINE}"
+    done
     if [[ "${VIOCF_TIER}" == "T0" ]]; then
       log ""
       log "  ⚠ 게이트 단계가 실패했다. 여기서 멈춘다."

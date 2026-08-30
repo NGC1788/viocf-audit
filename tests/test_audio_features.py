@@ -133,3 +133,53 @@ def test_parallel_feature_extraction_is_deterministic(tmp_path):
     assert list(frame["clip_id"]) == [f"clip{i:02d}" for i in range(12)], (
         "행 순서가 manifest 순서로 복원되지 않았다"
     )
+
+
+def test_parallel_qc_is_deterministic(tmp_path):
+    """QC 도 워커 수와 무관하게 같은 결과를 내야 한다.
+
+    QC 는 클립마다 파일 전체를 읽고 SHA-256 까지 계산한다. 직렬로는 1만 8천
+    클립에 수십 분이 걸려 병렬화했는데, 그 과정에서 판정이 흔들리면
+    '실패율 4.29 %' 같은 수치를 신뢰할 수 없게 된다.
+    """
+    import numpy as np
+    import pandas as pd
+    import soundfile as sf
+
+    from viocf.qc import qc_manifest
+
+    # ⚠ CONFIG["sample_rate"] 와 같아야 한다. 다르면 전부 sample_rate 불일치로
+    # 실패해서 무음/유음 대조가 성립하지 않는다.
+    rate = CONFIG["sample_rate"]
+    rng = np.random.default_rng(909)
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    records = []
+    for index in range(10):
+        samples = rng.normal(0, 10 ** (-85 / 20), int(rate * 2.0))
+        if index % 4:  # 일부는 일부러 무음으로 남겨 판정이 갈리게 한다
+            start, end = int(rate * 0.75), int(rate * 1.8)
+            times = np.arange(end - start) / rate
+            samples[start:end] += np.sin(2 * np.pi * 330.0 * times) * 10 ** (-15 / 20)
+        path = audio_dir / f"q{index:02d}.wav"
+        sf.write(path, samples.astype(np.float32), rate)
+        records.append({
+            "clip_id": f"q{index:02d}",
+            "audio_path": str(path),
+            "technique": "sustain",
+            "dynamic_label": "mf",
+        })
+    manifest = tmp_path / "qc_manifest.csv"
+    pd.DataFrame(records).to_csv(manifest, index=False)
+
+    outputs = {}
+    for workers in (1, 4):
+        target = tmp_path / f"qc_w{workers}.csv"
+        qc_manifest(manifest, target, tmp_path, CONFIG, workers=workers)
+        outputs[workers] = target.read_bytes()
+
+    assert outputs[1] == outputs[4], "워커 수에 따라 QC 판정이 달라진다"
+    frame = pd.read_csv(tmp_path / "qc_w4.csv")
+    assert list(frame["clip_id"]) == [f"q{i:02d}" for i in range(10)]
+    # 무음/유음이 실제로 갈렸는지 — 갈리지 않으면 이 테스트는 아무것도 검증하지 못한다
+    assert frame["qc_pass"].nunique() == 2, "판정이 한쪽으로만 나와 대조가 성립하지 않는다"
