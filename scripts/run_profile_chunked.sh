@@ -49,6 +49,7 @@ manifests = [
     root / "manifests" / f"{profile}_delayed_model.csv",
 ]
 groups: dict[str, list[Path]] = defaultdict(list)
+rows_by_key: dict[str, list[dict]] = defaultdict(list)
 for manifest in manifests:
     if not manifest.is_file():
         continue
@@ -67,6 +68,7 @@ for manifest in manifests:
         if not path.is_file():
             raise SystemExit(f"MIDI 없음: {path}")
         groups[key].append(path)
+        rows_by_key[key].append(row)
 
 if not groups:
     raise SystemExit(f"manifest 를 찾지 못했다: {profile}")
@@ -74,6 +76,18 @@ if not groups:
 for key, paths in sorted(groups.items()):
     if len(paths) != len(set(paths)):
         raise SystemExit(f"{key}: 중복 midi_path")
+
+    # ⚠ 청크별 manifest 를 따로 써야 한다.
+    # collect-violet 의 all_pass 는 "manifest 의 모든 행을 찾았는가"를 본다.
+    # 전체 manifest(18,432행)를 넘기면 청크에는 768개뿐이라 항상 false 가 되고,
+    # 진짜 실패와 구분이 안 된다(실제로 겪음 — 25청크 전부 all_pass=false 였는데
+    # pairing_failed_groups 는 전부 비어 있었다).
+    chunk_manifest = stage_root / f"{key}.manifest.csv"
+    with chunk_manifest.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows_by_key[key][0]))
+        writer.writeheader()
+        writer.writerows(rows_by_key[key])
+
     stage = stage_root / key
     if stage.exists():
         shutil.rmtree(stage)
@@ -89,7 +103,7 @@ for key, paths in sorted(groups.items()):
             os.link(path, target)
         except OSError:
             shutil.copy2(path, target)
-    print(f"{key}\t{stage}\t{len(paths)}")
+    print(f"{key}\t{stage}\t{len(paths)}\t{chunk_manifest}")
 PY
 } 2>&1)" || {
   echo "${VIOCF_PLAN}"
@@ -102,7 +116,7 @@ echo "청크: ${VIOCF_TOTAL}개 (프롬프트 단위)"
 echo
 
 VIOCF_INDEX=0
-while IFS=$'\t' read -r VIOCF_KEY VIOCF_MIDI_DIR VIOCF_COUNT; do
+while IFS=$'\t' read -r VIOCF_KEY VIOCF_MIDI_DIR VIOCF_COUNT VIOCF_CHUNK_MANIFEST; do
   [[ -n "${VIOCF_KEY}" ]] || continue
   VIOCF_INDEX=$((VIOCF_INDEX + 1))
 
@@ -130,13 +144,9 @@ while IFS=$'\t' read -r VIOCF_KEY VIOCF_MIDI_DIR VIOCF_COUNT; do
   # 그걸 manifest 의 audio_path(data/model_audio/)로 옮기고 pairing_pass 를 판정한다.
   # 이 단계를 빼먹으면 뒤의 특징추출·임베딩·지표가 전부 "파일 없음"으로 조용히
   # 빈 결과를 낸다(실제로 겪음: T5 가 50초 만에 '완료', T6 는 빈 CSV 로 실패).
-  VIOCF_MANIFEST="${VIOCF_ROOT}/manifests/${VIOCF_PROFILE}_model.csv"
-  if [[ "${VIOCF_KEY}" == *__delayed ]]; then
-    VIOCF_MANIFEST="${VIOCF_ROOT}/manifests/${VIOCF_PROFILE}_delayed_model.csv"
-  fi
   "${VIOCF_ROOT}/.venv/bin/viocf" collect-violet \
     --run-dir "${VIOCF_JOB_RUN_DIR}" \
-    --manifest "${VIOCF_MANIFEST}" \
+    --manifest "${VIOCF_CHUNK_MANIFEST}" \
     --output "${VIOCF_ROOT}/results/collect_${VIOCF_PROFILE}_${VIOCF_KEY}.csv"
 
   VIOCF_ELAPSED=$(( $(date +%s) - VIOCF_STARTED ))
