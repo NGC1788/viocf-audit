@@ -15,12 +15,24 @@
 커지는 게 아니다. 그래서 "강약을 바꿨을 때 음색이 함께 바뀌는가" 는 제어가
 물리적으로 그럴듯한지 가르는 질문이다.
 
-MERT 는 음량에 사실상 불변이다(같은 A4 를 -12 dB 낮춰도 코사인 1.0000 — 이 저장소
-embeddings.py 에 측정값이 적혀 있다). **이 눈멂이 여기서는 도구가 된다.** MERT 가
-p 와 f 를 구별하지 못한다면 그 차이에 음량 말고는 실질적 내용이 없다는 뜻이다.
+⚠⚠ 전제 정정 (실행 결과를 보고 발견한 내 오류)
 
-  C2ST(p, f) ~ 0.5  ->  강약 제어에 음색 변화가 없다 = 볼륨 손잡이
-  C2ST(p, f) >> 0.5 ->  음색도 함께 바뀐다
+  처음 이 스크립트는 "MERT 는 음량에 눈이 멀었다(A4 를 -12 dB 낮춰도 코사인
+  1.0000)"를 근거로, C2ST 가 p 와 f 를 구별하지 못하면 음색 변화가 없는 것이라고
+  했다. **그 근거는 여기에 쓸 수 없다.**
+
+  코사인 유사도는 **벡터의 크기를 무시한다.** 음량이 임베딩의 노름만 키우고
+  방향은 그대로 두면 코사인은 1.0000 이 나오지만, 원좌표를 쓰는 분류기는
+  그 크기 차이만으로 두 집단을 완벽히 갈라낸다. 즉 C2ST 가 높다고 해서
+  음색이 바뀌었다는 뜻이 되지 않는다.
+
+  그래서 대조를 하나 더 건다.
+
+    원좌표 C2ST 높음 + 정규화 C2ST 도 높음  ->  방향이 바뀌었다 = 진짜 음색 변화
+    원좌표 C2ST 높음 + 정규화 C2ST ~ 0.5    ->  크기만 바뀌었다 = 사실상 볼륨 손잡이
+
+  노름 자체도 강약별로 직접 출력한다. 노름이 p < mf < f 로 단조 증가하면
+  임베딩 크기가 음량을 따라간다는 직접 증거다.
 
 ⚠ 양성 대조가 없으면 이 음성 결과는 반증 불가능하다("임베딩이 고장났을 뿐"과
    구분이 안 된다). 그래서 주법 대조를 함께 잰다. 피치카토와 지속음은 사람 귀에
@@ -54,7 +66,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from itertools import combinations
+from itertools import combinations, pairwise, permutations
 from pathlib import Path
 
 import numpy as np
@@ -117,6 +129,68 @@ def c2st_between(
     }
 
 
+def magnitude_versus_direction(frame: pd.DataFrame, columns: list[str],
+                               max_per_side: int | None) -> dict:
+    """원좌표 C2ST 가 크기 때문인지 방향 때문인지 가른다."""
+    report: dict = {}
+    if "dynamic_label" not in frame.columns:
+        return report
+    matrix = frame[columns].to_numpy(dtype=float)
+    norms = np.linalg.norm(matrix, axis=1)
+
+    print()
+    print("=" * 72)
+    print("A2. 크기인가 방향인가 — 원좌표 C2ST 는 둘을 구분하지 못한다")
+    print("=" * 72)
+    table = (
+        pd.DataFrame({"dynamic_label": frame["dynamic_label"].to_numpy(), "norm": norms})
+        .groupby("dynamic_label")["norm"].agg(["mean", "std", "size"])
+    )
+    print("임베딩 L2 노름 (강약별)")
+    print(table.round(3).to_string())
+    order = [label for label in ("p", "mf", "f", "ff") if label in table.index]
+    if len(order) >= 3:
+        means = [float(table.loc[label, "mean"]) for label in order]
+        monotone = all(a < b for a, b in pairwise(means))
+        report["norm_monotone_with_dynamic"] = bool(monotone)
+        report["norm_by_dynamic"] = dict(zip(order, means))
+        spread = (max(means) - min(means)) / max(np.mean(means), 1e-12)
+        report["norm_relative_spread"] = float(spread)
+        print(f"  {' < '.join(order)} 순으로 단조 증가하는가: "
+              f"{'그렇다' if monotone else '아니다'}  (상대 변동폭 {spread * 100:.2f} %)")
+
+    # 방향만 남기고 다시 C2ST. 크기 정보가 사라진다.
+    unit = pd.DataFrame(
+        matrix / np.maximum(norms[:, None], 1e-12), columns=columns, index=frame.index
+    )
+    unit["dynamic_label"] = frame["dynamic_label"].to_numpy()
+    rows: list[dict] = []
+    labels = [label for label in ("p", "mf", "f", "ff") if (unit["dynamic_label"] == label).any()]
+    for left, right in combinations(labels, 2):
+        item = c2st_between(unit, columns, "dynamic_label", left, right, max_per_side)
+        if item:
+            rows.append(item)
+    if rows:
+        normalized = pd.DataFrame(rows)
+        print()
+        print("L2 정규화 후 C2ST (크기를 지운 뒤에도 구별되는가)")
+        print(normalized[["contrast", "accuracy", "p_value", "n"]].round(4)
+              .to_string(index=False))
+        mean_accuracy = float(normalized["accuracy"].mean())
+        report["dynamic_c2st_normalized_mean"] = mean_accuracy
+        print()
+        print(f"  정규화 후 평균 정확도 {mean_accuracy:.4f}")
+        if mean_accuracy < 0.60:
+            print("  -> 크기를 지우니 구별이 무너진다. 원좌표의 높은 정확도는")
+            print("     **음량(크기)** 때문이었다. 강약 제어는 사실상 볼륨 손잡이다.")
+        elif mean_accuracy > 0.75:
+            print("  -> 크기를 지워도 여전히 구별된다. 방향이 실제로 바뀌었다")
+            print("     = 강약이 음색까지 바꾼다. 이건 실제 바이올린과 같은 방향의 성질이다.")
+        else:
+            print("  -> 중간이다. 크기와 방향이 둘 다 기여한다. 단정하지 말 것.")
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--embeddings", nargs="*", default=None)
@@ -172,8 +246,12 @@ def main() -> int:
 
     if "technique" in frame.columns:
         techniques = sorted(frame["technique"].dropna().unique())
-        # 양성 대조는 몇 쌍이면 충분하다. 전 조합은 비싸다.
-        for left, right in list(combinations(techniques, 2))[:6]:
+        # 양성 대조는 몇 쌍이면 충분하지만 **앵커가 한쪽으로 쏠리면 안 된다.**
+        # combinations(...)[:6] 은 전부 첫 주법을 앵커로 잡는다(실제로 그랬다).
+        # 겹치지 않는 쌍으로 흩어 고른다.
+        candidates = list(combinations(techniques, 2))
+        stride = max(1, len(candidates) // 6)
+        for left, right in candidates[::stride][:6]:
             item = c2st_between(frame, columns, "technique", left, right,
                                 args.max_per_side)
             if item:
@@ -206,6 +284,8 @@ def main() -> int:
                     print("     실제 바이올린은 활 압력이 배음 구조를 바꾼다. 다음 줄의")
                     print("     음량 대조와 반드시 함께 읽을 것.")
 
+    report.update(magnitude_versus_direction(frame, columns, args.max_per_side))
+
     # ── 음량은 실제로 바뀌었는가 (해석을 가르는 대조) ──────────────────
     features_path = Path(args.features) if args.features else (
         root / "results" / args.profile / "model_features.csv"
@@ -236,9 +316,12 @@ def main() -> int:
     print("=" * 72)
     if {"technique", "dynamic_label"}.issubset(frame.columns):
         base_dyn, target_dyn = "mf", "f"
+        # ⚠ 앵커 편향 주의: 처음엔 combinations(...)[:6] 을 썼는데 정렬 순서상
+        # 전부 harmonic 을 앵커로 하는 쌍이었다. 이 절은 C2ST 를 안 쓰고 평균만
+        # 계산하므로 비싸지 않다 — 전 조합을 양방향으로 본다.
         techniques = sorted(frame["technique"].dropna().unique())
         pairs: list[dict] = []
-        for base_tech, other_tech in list(combinations(techniques, 2))[:6]:
+        for base_tech, other_tech in permutations(techniques, 2):
             anchor = cell_mean(frame.loc[frame["technique"].eq(base_tech)
                                          & frame["dynamic_label"].eq(base_dyn)], columns)
             moved_dyn = cell_mean(frame.loc[frame["technique"].eq(base_tech)
@@ -285,7 +368,7 @@ def main() -> int:
     if {"technique", "dynamic_label"}.issubset(frame.columns):
         gaps: list[dict] = []
         techniques = sorted(frame["technique"].dropna().unique())
-        for base_tech, other_tech in list(combinations(techniques, 2))[:6]:
+        for base_tech, other_tech in permutations(techniques, 2):
             def cell(tech: str, dyn: str) -> np.ndarray | None:
                 return cell_mean(frame.loc[frame["technique"].eq(tech)
                                            & frame["dynamic_label"].eq(dyn)], columns)
