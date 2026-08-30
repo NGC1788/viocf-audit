@@ -654,7 +654,13 @@ def run_metric_suite(
     # -60 dBFS 를 못 넘으면 소리가 없는 것이다(audio.detect_active_region).
     # peak 경계는 QC 를 아직 안 돌린 경우의 마지막 수단으로만 남긴다.
     dropped_by = None
-    if "qc_reasons" in data.columns:
+    if "silent_absolute" in data.columns:
+        # 1순위. 특징 추출이 직접 낸 절대 기준이다(features.SILENCE_FLOOR_DBFS).
+        # 앞구간을 보지 않으므로 검출기의 노이즈 추정 오염에 영향받지 않는다.
+        before = len(data)
+        data = data.loc[~data["silent_absolute"].astype(bool)].copy()
+        dropped_by = ("절대 기준 (프레임 RMS 최대 < -60 dBFS)", before - len(data), before)
+    elif "qc_reasons" in data.columns:
         reasons = data["qc_reasons"].fillna("")
         broken = reasons.str.contains(
             "near_silence|missing_audio|non_finite_samples", regex=True

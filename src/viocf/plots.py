@@ -9,6 +9,21 @@ import pandas as pd
 import seaborn as sns
 
 
+def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+    """빈 CSV 를 만나도 죽지 않는다.
+
+    실연주 녹음이 아직 없으면 실악기 기준선이 필요한 지표 파일이 헤더도 없이
+    0 바이트로 남는다. pandas 는 거기서 EmptyDataError 를 던지고, 그 탓에
+    **모델만으로 나오는 그림까지 통째로 못 만든다**(실제로 겪음).
+    """
+    try:
+        if not Path(path).is_file() or Path(path).stat().st_size == 0:
+            return pd.DataFrame()
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def _relative_rms(frame: pd.DataFrame) -> pd.DataFrame:
     data = frame.loc[frame["profile"].eq("constant")].copy()
     if "unit_id" not in data:
@@ -35,7 +50,8 @@ def make_figures(
     metrics_dir: str | Path,
     output_dir: str | Path,
 ) -> list[Path]:
-    frames = [pd.read_csv(path) for path in feature_paths]
+    frames = [_read_csv_or_empty(path) for path in feature_paths]
+    frames = [f for f in frames if not f.empty]
     if not frames:
         raise ValueError("At least one feature CSV is required")
     features = pd.concat(frames, ignore_index=True, sort=False)
@@ -73,7 +89,7 @@ def make_figures(
     metric_root = Path(metrics_dir)
     contrasts_path = metric_root / "contrasts.csv"
     if contrasts_path.exists():
-        contrasts = pd.read_csv(contrasts_path)
+        contrasts = _read_csv_or_empty(contrasts_path)
         metadata = {
             "source",
             "prompt_id",
@@ -109,7 +125,7 @@ def make_figures(
 
     delayed_path = metric_root / "delayed_branch.csv"
     if delayed_path.exists():
-        delayed = pd.read_csv(delayed_path)
+        delayed = _read_csv_or_empty(delayed_path)
         delayed = delayed.loc[delayed["technique"].isin(["sustain", "pizzicato"])]
         if not delayed.empty:
             figure, axes = plt.subplots(1, 2, figsize=(13, 5))
@@ -126,8 +142,8 @@ def make_figures(
     alignment_path = metric_root / "effect_alignment.csv"
     leakage_path = metric_root / "excess_leakage.csv"
     if alignment_path.exists() and leakage_path.exists():
-        alignment = pd.read_csv(alignment_path)
-        leakage = pd.read_csv(leakage_path)
+        alignment = _read_csv_or_empty(alignment_path)
+        leakage = _read_csv_or_empty(leakage_path)
         if not alignment.empty and not leakage.empty:
             figure, axes = plt.subplots(1, 2, figsize=(14, 5))
             sns.barplot(

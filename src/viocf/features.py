@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import scipy.signal
 
-from .audio import amplitude_to_db, detect_active_region, read_audio, rms
+from .audio import amplitude_to_db, detect_active_region, frame_rms, read_audio, rms
 from .pitch import estimate_monophonic_pitch, modulation_track
 
 EPS = 1e-12
@@ -295,6 +295,13 @@ def _pitch_features(
     }
 
 
+# 무음 판정(절대 기준). 앞구간을 보지 않으므로 노이즈 추정 오염에 영향받지 않는다.
+# 프레이밍은 audio.detect_active_region 과 같게 둔다. 개정 11·13 참조.
+SILENCE_FLOOR_DBFS = -60.0
+SILENCE_FRAME_SECONDS = 0.046
+SILENCE_HOP_SECONDS = 0.010
+
+
 def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     audio = read_audio(path, mono=True)
     samples = audio.samples
@@ -309,6 +316,21 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
         active = samples[int(region["start_sample"]) : int(region["end_sample"])]
     else:
         active = np.array([], dtype=np.float32)
+
+    # ⚠ 무음 판정을 여기서 함께 낸다. 이미 오디오를 읽었으니 공짜다.
+    #
+    # 왜 필요한가: 지표 계산 때 특징표만 넘어가고 QC 표는 안 넘어간다. 그래서
+    # metrics 가 폐기된 peak 경계로 물러나 1,678 클립(9.0 %)을 잘못된 기준으로
+    # 걸러냈다(실제로 겪음). 절대 기준을 특징표 안에 넣어두면 그 일이 없다.
+    #
+    # 기준: 어떤 46 ms 프레임 RMS 도 -60 dBFS 를 못 넘으면 소리가 없는 것이다.
+    # 앞구간(노이즈 추정)을 보지 않으므로 오염되지 않는다 — 개정 11 참조.
+    silence_frame_length = max(32, round(SILENCE_FRAME_SECONDS * sample_rate))
+    silence_hop_length = max(1, round(SILENCE_HOP_SECONDS * sample_rate))
+    silence_curve = frame_rms(samples, silence_frame_length, silence_hop_length)
+    frame_rms_max_dbfs = (
+        float(amplitude_to_db(float(silence_curve.max()))) if silence_curve.size else -math.inf
+    )
 
     overall_rms = rms(samples)
     active_rms = rms(active)
@@ -325,6 +347,8 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
     onset_time = float(region["start_s"]) if region["active"] else math.nan
 
     row: dict[str, Any] = dict(metadata)
+    row["frame_rms_max_dbfs"] = frame_rms_max_dbfs
+    row["silent_absolute"] = bool(frame_rms_max_dbfs < SILENCE_FLOOR_DBFS)
     row.update(
         {
             "resolved_audio_path": str(Path(path).resolve()),
