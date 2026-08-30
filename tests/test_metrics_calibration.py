@@ -278,3 +278,63 @@ def test_metrics_falls_back_to_peak_when_grade_missing(tmp_path: Path) -> None:
     frame.to_csv(path, index=False)
     with pytest.warns(UserWarning, match="peak"):
         run_metric_suite([path], tmp_path / "out", CONFIG)
+
+
+def test_delayed_branch_does_not_count_unmeasurable_groups_as_leaks():
+    """무음 탓에 값이 없는 그룹을 '누출 있음'으로 세면 안 된다.
+
+    이 검정의 주장은 "N개 그룹 전부에서 분기 전 구간이 다르다"이다. 분모에
+    측정 불가 그룹이 섞이면 그 주장이 부풀려진다. 예전 코드는 spread 가 전부
+    NaN 일 때 nanmax(...) = NaN 이 되고 `NaN < 1e-6` 이 False 라 누출로 셌다.
+
+    세 종류를 섞어 넣고 각각이 제대로 분류되는지 본다.
+      causal      분기 전이 완전히 동일 -> identical
+      leaky       분기 전이 다름        -> 누출
+      unmeasurable 무음이라 값이 NaN    -> 판정 제외
+    """
+    import numpy as np
+
+    from viocf.metrics import delayed_branch_strict_model_leak
+
+    rows = []
+    for group_name, kind in (
+        ("g_causal", "causal"),
+        ("g_leaky", "leaky"),
+        ("g_nan", "unmeasurable"),
+    ):
+        for index, dynamic in enumerate(("p", "mf", "f")):
+            if kind == "causal":
+                rms_value, centroid = -20.0, 900.0
+            elif kind == "leaky":
+                rms_value, centroid = -20.0 + index * 4.0, 900.0 + index * 50.0
+            else:
+                rms_value, centroid = np.nan, np.nan
+            rows.append({
+                "profile": "delayed",
+                "source": "model",
+                "prompt_id": "delayed_A4",
+                "technique": "pizzicato",
+                "noise_group": group_name,
+                "dynamic_label": dynamic,
+                "prebranch_rms_dbfs": rms_value,
+                "prebranch_centroid_hz": centroid,
+            })
+    frame = pd.DataFrame(rows)
+
+    result = delayed_branch_strict_model_leak(frame)
+    assert len(result) == 3
+    by_group = result.set_index("noise_group")
+
+    assert by_group.loc["g_causal", "measurable"]
+    assert by_group.loc["g_causal", "prebranch_identical"], "동일한 그룹을 누출로 셌다"
+
+    assert by_group.loc["g_leaky", "measurable"]
+    assert not by_group.loc["g_leaky", "prebranch_identical"]
+
+    assert not by_group.loc["g_nan", "measurable"], (
+        "값이 전부 NaN 인 그룹이 측정 가능으로 분류됐다"
+    )
+
+    measured = result.loc[result["measurable"]]
+    assert len(measured) == 2, "측정 불가 그룹이 분모에 남았다"
+    assert int(measured["prebranch_identical"].sum()) == 1

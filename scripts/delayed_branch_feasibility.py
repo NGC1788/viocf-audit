@@ -130,6 +130,49 @@ def main() -> int:
                 print("    -> 이항과 크게 다르지 않다. 독립 실패로 보는 게 안전하다.")
                 print("       대응: seed 를 늘려도 그룹당 결손은 그대로다.")
 
+    # 섞인 그룹(일부만 무음)에서 어느 강약이 살아남는가.
+    # 무음이 latent 로 결정된다면 섞인 그룹은 '경계선 latent' 다. 거기서 살아남는
+    # 쪽이 계통적으로 f 라면 **강약을 올리는 것이 렌더를 구제한다**는 뜻이고,
+    # 그건 무음이 순수한 latent 문제가 아니라 조건과 상호작용한다는 증거다.
+    print()
+    print("=" * 74)
+    print("섞인 그룹 — 경계선 latent 에서 어느 강약이 살아남는가")
+    print("=" * 74)
+    mixed_rows: list[dict] = []
+    for (technique, noise_group), cell in data.groupby(["technique", "noise_group"]):
+        silent_count = int(cell["silent_absolute"].sum())
+        if 0 < silent_count < len(cell):
+            for _, record in cell.iterrows():
+                mixed_rows.append({
+                    "technique": technique,
+                    "dynamic_label": record.get("dynamic_label"),
+                    "survived": not bool(record["silent_absolute"]),
+                })
+    if not mixed_rows:
+        print("  섞인 그룹이 없다 (전부 살거나 전부 죽는다).")
+        print("  -> 무음이 오로지 초기 latent 로 결정된다는 뜻이다.")
+    else:
+        mixed = pd.DataFrame(mixed_rows)
+        table = mixed.pivot_table(
+            index="dynamic_label", columns="technique", values="survived",
+            aggfunc=["mean", "count"],
+        )
+        print(f"  섞인 그룹의 클립 {len(mixed)}개 — 강약별 생존율")
+        print((table * 1).round(3).to_string())
+        overall = mixed.groupby("dynamic_label")["survived"].agg(["mean", "count"])
+        print()
+        print("  강약별 생존율 (전체)")
+        print(overall.round(3).to_string())
+        if len(overall) >= 2:
+            spread = float(overall["mean"].max() - overall["mean"].min())
+            best = str(overall["mean"].idxmax())
+            print(f"  생존율 차이 {spread:.3f} — 가장 잘 살아남는 강약: {best}")
+            if spread >= 0.34:
+                print("  -> 강약에 따라 생존이 갈린다. 무음이 latent 만의 문제가 아니라")
+                print("     조건과 상호작용한다. 이건 그 자체로 보고할 결과다.")
+            else:
+                print("  -> 강약 간 차이가 뚜렷하지 않다. 표본이 작으니 단정하지 말 것.")
+
     print()
     print("=" * 74)
     print("판정")

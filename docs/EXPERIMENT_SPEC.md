@@ -412,3 +412,48 @@ replicate 를 늘려도 그룹당 결손 비율은 그대로다.
 `make_figures` 가 거기서 `EmptyDataError` 로 죽어 **모델만으로 나오는 그림까지
 통째로 못 만들었다**(`ERROR: No columns to parse from file`).
 읽기를 방어적으로 바꿨다.
+
+## 개정 19 — 지연 분기 검정에서 측정 불가 그룹이 '누출'로 세어지던 문제
+
+전수 실행 중 `RuntimeWarning: All-NaN axis encountered` 가 두 번 떴다. 원인을 보니
+헤드라인 지표의 논리 오류였다.
+
+무음 클립은 분기 전 특징이 NaN 이다. 강약 라벨이 2개 이상 있어도 **값이** 2개가
+아니면 spread 를 낼 수 없다. 그 경우 `np.nanmax([nan, nan])` 이 NaN 이 되고
+`NaN < 1e-6` 이 False 라서 **자료가 없는 그룹이 '누출 있음'으로 세어졌다.**
+
+이 검정의 주장이 "N개 그룹 **전부**에서 분기 전 구간이 다르다"인 만큼 분모가
+오염되면 주장 자체가 부풀려진다.
+
+고침: `measurable` 열을 두어 유한한 spread 가 하나라도 있는 그룹만 판정에
+넣는다. 요약도 `noise_groups_measured` / `noise_groups_unmeasurable` 로 나누고
+`median_spread` 를 함께 낸다(최대값만 보면 이상치 하나에 휘둘린다).
+
+회귀 테스트 `test_delayed_branch_does_not_count_unmeasurable_groups_as_leaks` 가
+causal / leaky / 측정불가 세 그룹을 섞어 넣고 각각의 분류를 확인한다.
+
+## 개정 20 — 지연 분기 무음은 초기 latent 가 결정한다 (전수 확인)
+
+`delayed_branch_feasibility.py` 실제 결과. 예측이 맞았다.
+
+pizzicato, 그룹 크기 3, 무음률 34.4 %:
+
+| 그룹당 무음 수 | 관측 | 이항 기대 |
+|---|---|---|
+| 0 | 19 | 9.0 |
+| 1 | **0** | 14.2 |
+| 2 | 6 | 7.4 |
+| 3 | 7 | 1.3 |
+
+**정확히 1개만 무음인 그룹이 하나도 없다.** 독립이라면 14.2개가 나와야 한다.
+양 끝 관측 26 vs 기대 10.3. 무음은 렌더마다 독립적으로 일어나는 게 아니라
+**초기 latent 가 그룹째 결정한다.** noise_group 이 seed 를 결정하고 한 그룹의
+p/mf/f 가 같은 latent 를 쓰므로 설계와 일치한다.
+
+쓸 수 있는 그룹: pizzicato 19/32 + sustain 32/32 = **51**. 개정 16 의 예측
+(53~60) 범위에 가깝고, 실험은 성립한다. 대응은 '뭉침' 쪽이므로 replicate 를
+늘리면 그룹이 늘어난다.
+
+**남은 질문.** 정확히 2개가 무음인 6개 그룹은 '경계선 latent' 다. 거기서 살아남는
+쪽이 계통적으로 특정 강약이라면 무음이 latent 만의 문제가 아니라 조건과
+상호작용한다는 뜻이다. 스크립트가 그 생존율을 강약별로 낸다.

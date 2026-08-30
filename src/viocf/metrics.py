@@ -453,9 +453,20 @@ def delayed_branch_strict_model_leak(frame: pd.DataFrame) -> pd.DataFrame:
         for feature in features:
             values = pd.to_numeric(cells[feature], errors="coerce").dropna().to_numpy(dtype=float)
             row[f"spread_{feature}"] = float(np.ptp(values)) if values.size >= 2 else math.nan
-        row["prebranch_identical"] = bool(
-            np.nanmax([abs(row.get(f"spread_{f}", math.nan)) for f in features]) < 1e-6
-        )
+
+        # ⚠ 무음 클립은 분기 전 특징이 NaN 이다. 강약 라벨이 2개 있어도 **값이**
+        # 2개가 아니면 spread 를 낼 수 없다.
+        #
+        # 예전 코드는 그 경우 nanmax([nan, nan]) = nan 이 되고 nan < 1e-6 이 False 라
+        # **자료가 없는 그룹을 '누출 있음'으로 세었다.** 자료 없음과 누출은 다르다.
+        # 이 검정의 주장이 '46/46 그룹에서 누출'인 만큼 분모가 오염되면 안 된다.
+        spreads = [
+            abs(row[f"spread_{feature}"])
+            for feature in features
+            if np.isfinite(row.get(f"spread_{feature}", math.nan))
+        ]
+        row["measurable"] = bool(spreads)
+        row["prebranch_identical"] = bool(max(spreads) < 1e-6) if spreads else False
         records.append(row)
     return pd.DataFrame(records)
 
@@ -808,11 +819,29 @@ def run_metric_suite(
 
     if not delayed_strict.empty:
         spread_cols = [c for c in delayed_strict.columns if c.startswith("spread_")]
+        # 측정 가능한 그룹만 분모에 넣는다. 무음 탓에 값이 없는 그룹을 '누출'로
+        # 세면 결론이 부풀려진다.
+        measured = (
+            delayed_strict.loc[delayed_strict["measurable"]]
+            if "measurable" in delayed_strict.columns
+            else delayed_strict
+        )
         headline["delayed_model_only_prebranch"] = {
-            "noise_groups": len(delayed_strict),
-            "identical_groups": int(delayed_strict["prebranch_identical"].sum()),
-            "max_spread": {c: float(delayed_strict[c].max()) for c in spread_cols},
-            "note": "인과적 생성기라면 분기 전 spread 가 0 이어야 한다",
+            "noise_groups_measured": len(measured),
+            "noise_groups_unmeasurable": int(len(delayed_strict) - len(measured)),
+            "identical_groups": int(measured["prebranch_identical"].sum()),
+            "max_spread": {
+                c: (float(measured[c].max()) if measured[c].notna().any() else None)
+                for c in spread_cols
+            },
+            "median_spread": {
+                c: (float(measured[c].median()) if measured[c].notna().any() else None)
+                for c in spread_cols
+            },
+            "note": (
+                "인과적 생성기라면 분기 전 spread 가 0 이어야 한다. "
+                "unmeasurable 은 무음 탓에 값이 없어 판정에서 제외한 그룹이다."
+            ),
         }
     paths["summary"].write_text(
         json.dumps(headline, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
