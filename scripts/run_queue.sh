@@ -153,7 +153,10 @@ while IFS=$'\t' read -r VIOCF_TIER VIOCF_KIND VIOCF_ARG VIOCF_DESC; do
       ;;
     analyze)
       # CPU 단계. GPU 가 비므로 다음 생성 잡과 겹쳐 돌려도 된다.
-      bash "${VIOCF_ROOT}/scripts/run_pilot_analysis.sh" || VIOCF_STAGE_OK=false
+      # ⚠ 예전엔 run_pilot_analysis.sh 를 불렀는데 그건 pilot manifest 만 본다.
+      #    본체(expanded 18,624클립)의 특징 추출 경로가 큐에 아예 없었다.
+      bash "${VIOCF_ROOT}/scripts/run_profile_analysis.sh" "${VIOCF_ARG}" \
+        || VIOCF_STAGE_OK=false
       ;;
     *)
       log "  알 수 없는 종류: ${VIOCF_KIND}"
