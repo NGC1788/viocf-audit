@@ -147,6 +147,7 @@ def command_features(args: argparse.Namespace) -> None:
         root,
         config.raw,
         include_missing=args.include_missing,
+        workers=args.workers,
     )
     errors = int(frame.get("feature_error", pd.Series(index=frame.index, dtype=object)).notna().sum())
     _json_print({"rows": len(frame), "errors": errors, "output": str(Path(args.output).resolve())})
@@ -328,6 +329,10 @@ def build_parser() -> argparse.ArgumentParser:
     features.add_argument("--manifest", required=True)
     features.add_argument("--output", required=True)
     features.add_argument("--include-missing", action="store_true")
+    features.add_argument(
+        "--workers", type=int, default=None,
+        help="병렬 워커 수 (기본: 코어수-2). 1 이면 직렬. 결과는 워커 수와 무관하게 동일하다.",
+    )
     features.set_defaults(func=command_features)
 
     metrics = subparsers.add_parser("metrics", help="Compute alignment, leakage, and compositionality")

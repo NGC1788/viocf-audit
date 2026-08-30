@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import math
+import os
+import sys
 from collections.abc import Iterable
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -396,37 +399,122 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
     return row
 
 
+def _extract_one(job: tuple[int, dict[str, Any], str, dict[str, Any], bool]) -> tuple[int, dict[str, Any] | None]:
+    """워커 하나가 클립 하나를 처리한다. 예외는 행으로 보존한다(감사 가능해야 한다)."""
+    index, metadata, audio_path_text, config, include_missing = job
+    audio_path = Path(audio_path_text)
+    if not audio_path.exists():
+        if include_missing:
+            missing = dict(metadata)
+            missing.update(
+                {"resolved_audio_path": str(audio_path), "feature_error": "missing_audio"}
+            )
+            return index, missing
+        return index, None
+    try:
+        return index, extract_features(audio_path, metadata, config)
+    except Exception as exc:  # noqa: BLE001 - preserve each failed row for audit
+        failed = dict(metadata)
+        failed.update(
+            {
+                "resolved_audio_path": str(audio_path),
+                "feature_error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return index, failed
+
+
+def _default_workers() -> int:
+    # 코어를 다 쓰면 서버가 먹통이 된다. 2개는 남긴다.
+    return max(1, (os.cpu_count() or 2) - 2)
+
+
 def extract_manifest_features(
     manifest_path: str | Path,
     output_path: str | Path,
     project_root: str | Path,
     config: dict[str, Any],
     include_missing: bool = False,
+    workers: int | None = None,
+    progress_every: int = 500,
 ) -> pd.DataFrame:
+    """manifest 의 클립에서 해석 가능한 특징을 뽑는다.
+
+    ⚠ 병렬이다. 18,624 클립을 직렬로 돌리면 yin F0 때문에 10 시간 가까이 걸리는데,
+    그동안 나머지 코어가 논다(실제로 겪음 — 26코어 서버에서 1코어만 돌았다).
+
+    결정성은 유지된다. 특징 추출에는 난수가 없고, 결과를 manifest 순서로 다시
+    정렬해서 쓴다. 워커 수를 바꿔도 출력 파일은 같다.
+
+    각 워커 안에서는 BLAS/OpenMP 스레드를 1로 묶는다. 안 그러면 프로세스마다
+    스레드를 또 띄워서 과구독으로 오히려 느려진다.
+    """
     root = Path(project_root).resolve()
     manifest = pd.read_csv(manifest_path)
-    rows: list[dict[str, Any]] = []
-    for metadata in manifest.to_dict(orient="records"):
+
+    jobs: list[tuple[int, dict[str, Any], str, dict[str, Any], bool]] = []
+    for index, metadata in enumerate(manifest.to_dict(orient="records")):
         audio_path = Path(str(metadata["audio_path"]))
         if not audio_path.is_absolute():
             audio_path = root / audio_path
-        if not audio_path.exists():
-            if include_missing:
-                missing = dict(metadata)
-                missing.update({"resolved_audio_path": str(audio_path), "feature_error": "missing_audio"})
-                rows.append(missing)
-            continue
-        try:
-            rows.append(extract_features(audio_path, metadata, config))
-        except Exception as exc:  # noqa: BLE001 - preserve each failed row for audit
-            failed = dict(metadata)
-            failed.update(
-                {
-                    "resolved_audio_path": str(audio_path),
-                    "feature_error": f"{type(exc).__name__}: {exc}",
-                }
+        jobs.append((index, metadata, str(audio_path), config, include_missing))
+
+    worker_count = workers if workers is not None else _default_workers()
+    collected: dict[int, dict[str, Any]] = {}
+
+    if worker_count <= 1 or len(jobs) <= 1:
+        for job in jobs:
+            index, row = _extract_one(job)
+            if row is not None:
+                collected[index] = row
+    else:
+        # 워커마다 스레드를 1개로 묶는다. 과구독 방지.
+        environment = {
+            name: "1"
+            for name in (
+                "OMP_NUM_THREADS",
+                "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS",
             )
-            rows.append(failed)
+        }
+        # ⚠ spawn 방식(맥 기본, 파이썬 3.14+ 리눅스 기본)에서는 자식이 새 인터프리터로
+        # 시작해 viocf 를 **다시 import** 해야 한다. editable 설치의 .pth 가 어떤
+        # 이유로든 안 먹으면 자식만 ModuleNotFoundError 로 죽는다(실제로 겪음).
+        # PYTHONPATH 로 직접 넘기면 시작 방식과 무관하게 확실하다.
+        package_root = str(Path(__file__).resolve().parents[1])
+        existing_pythonpath = os.environ.get("PYTHONPATH", "")
+        if package_root not in existing_pythonpath.split(os.pathsep):
+            environment["PYTHONPATH"] = (
+                f"{package_root}{os.pathsep}{existing_pythonpath}"
+                if existing_pythonpath
+                else package_root
+            )
+        previous = {name: os.environ.get(name) for name in environment}
+        os.environ.update(environment)
+        try:
+            with ProcessPoolExecutor(max_workers=worker_count) as pool:
+                for done, (index, row) in enumerate(
+                    pool.map(_extract_one, jobs, chunksize=8), start=1
+                ):
+                    if row is not None:
+                        collected[index] = row
+                    if progress_every and done % progress_every == 0:
+                        print(
+                            f"  특징 추출 {done:,}/{len(jobs):,} "
+                            f"(워커 {worker_count}개)",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    # manifest 순서로 되돌린다 — 워커 수와 무관하게 같은 파일이 나와야 한다.
+    rows = [collected[index] for index in sorted(collected)]
     frame = pd.DataFrame(rows)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)

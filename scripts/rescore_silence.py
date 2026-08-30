@@ -153,6 +153,14 @@ def main() -> int:
         mark = "  <- 무음 경계" if edge == ABSOLUTE_FLOOR_DBFS else ""
         print(f"  {edge:+6.0f} {count:7,d} {'#' * int(50 * count / peak_count)}{mark}")
 
+    # 경계를 옮기면 결과가 얼마나 흔들리는가. 골짜기에 놓였다면 완만해야 한다.
+    print()
+    print("경계 민감도 — 이 숫자가 급변하면 경계가 골짜기에 있지 않다는 뜻이다")
+    for threshold in (-70.0, -65.0, -60.0, -55.0, -50.0, -45.0):
+        count = int((data["frame_rms_max_dbfs"] < threshold).sum())
+        mark = "  <- 채택" if threshold == ABSOLUTE_FLOOR_DBFS else ""
+        print(f"  {threshold:6.0f} dBFS  {count:6,d}  {count / total * 100:5.2f} %{mark}")
+
     print()
     print("=" * 74)
     print(f"앞 {PREROLL_SECONDS:.2f} 초 — 악보상 첫 음은 {NOTE_ONSET_SECONDS} 초다")
