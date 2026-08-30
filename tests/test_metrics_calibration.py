@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -219,3 +220,61 @@ def test_c2st_handles_degenerate_input() -> None:
     tiny = rng.normal(0, 1, (2, 4))
     out = classifier_two_sample_test(tiny, rng.normal(0, 1, (2, 4)))
     assert np.isnan(out["accuracy"])
+
+
+def test_metrics_excludes_failed_renders(tmp_path: Path) -> None:
+    """무음/약한 렌더가 지표에 섞이면 안 된다.
+
+    VIOLET 은 near-silent 렌더를 seed 재시도로 감추는데, 우리는 짝 실험을 위해
+    재시도를 껐다. 그래서 실패 클립이 그대로 남는다. 실패율은 별도 결과로 보고하되,
+    지표 계산에는 절대 들어가면 안 된다 — 평균과 분산을 통째로 오염시킨다.
+    """
+    from viocf.metrics import run_metric_suite
+
+    frame = synthetic_feature_table().copy()
+    frame["render_grade"] = "ok"
+    poisoned = frame.index[: len(frame) // 3]
+    frame.loc[poisoned, "render_grade"] = "silent"
+    for column in ("rms_dbfs", "spectral_centroid_hz"):
+        if column in frame:
+            frame.loc[poisoned, column] = -999.0
+
+    path = tmp_path / "features.csv"
+    frame.to_csv(path, index=False)
+    with pytest.warns(UserWarning, match="렌더 실패"):
+        paths = run_metric_suite([path], tmp_path / "out", CONFIG)
+
+    poisoned_scales = json.loads(
+        paths["summary"].read_text(encoding="utf-8")
+    ).get("robust_feature_scales", {})
+
+    # 오염 행을 아예 넣지 않은 경우와 비교한다. 제외가 제대로 됐다면 두 스케일이 같아야 한다.
+    # (특징마다 단위가 달라서 절대값으로는 판정할 수 없다 — centroid 는 Hz 라 수백이 정상이다)
+    clean = frame.loc[frame["render_grade"].eq("ok")].copy()
+    clean_path = tmp_path / "clean.csv"
+    clean.to_csv(clean_path, index=False)
+    clean_scales = json.loads(
+        run_metric_suite([clean_path], tmp_path / "out_clean", CONFIG)["summary"]
+        .read_text(encoding="utf-8")
+    ).get("robust_feature_scales", {})
+
+    for name, value in clean_scales.items():
+        assert name in poisoned_scales
+        assert poisoned_scales[name] == pytest.approx(value, rel=1e-9), (
+            f"{name}: 무음 행이 스케일을 오염시켰다 "
+            f"({poisoned_scales[name]} != {value})"
+        )
+
+
+def test_metrics_falls_back_to_peak_when_grade_missing(tmp_path: Path) -> None:
+    """render_grade 열이 없어도 peak 로 걸러야 한다."""
+    from viocf.metrics import run_metric_suite
+
+    frame = synthetic_feature_table().copy()
+    frame["peak_dbfs"] = -12.0
+    frame.loc[frame.index[:4], "peak_dbfs"] = -70.0
+
+    path = tmp_path / "features.csv"
+    frame.to_csv(path, index=False)
+    with pytest.warns(UserWarning, match="peak"):
+        run_metric_suite([path], tmp_path / "out", CONFIG)

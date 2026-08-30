@@ -29,3 +29,4 @@ src/*.egg-info/
 data/midi/
 .DS_Store
 **/.DS_Store
+.venv-check/

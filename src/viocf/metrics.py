@@ -629,6 +629,36 @@ def run_metric_suite(
         raise ValueError("At least one feature CSV is required")
     data = pd.concat(frames, ignore_index=True, sort=False)
     data = data.loc[data.get("feature_error", pd.Series(index=data.index, dtype=object)).isna()]
+    # ⚠ 렌더가 실패한 클립(무음/비정상적으로 약함)은 특징값이 무의미하다.
+    # 그대로 두면 평균과 분산을 오염시켜 CEA/HCEL/CG 가 전부 틀어진다.
+    #
+    # 이 실패는 버그가 아니라 관측 대상이다 — VIOLET 원본은 near-silent 렌더를
+    # 다른 seed 로 재시도해 감추지만, 우리는 짝 실험을 지키려고 재시도를 껐다.
+    # 그래서 실패율 자체가 결과가 된다(scripts/analyze_render_failures.py).
+    # 다만 **지표 계산에서는 빼야 한다.** 실패율은 따로 보고한다.
+    if "render_grade" in data.columns:
+        before = len(data)
+        data = data.loc[data["render_grade"].eq("ok")].copy()
+        dropped = before - len(data)
+        if dropped:
+            warnings.warn(
+                f"렌더 실패 클립 {dropped}개를 지표에서 제외했다 "
+                f"({dropped / before * 100:.1f}%). 실패율은 별도로 보고할 것 — "
+                "이건 결측이 아니라 관측 결과다.",
+                stacklevel=2,
+            )
+    elif "peak_dbfs" in data.columns:
+        # render_grade 가 없으면 peak 로 즉석 판정한다(기준은 analyze_render_failures.py 와 동일).
+        before = len(data)
+        data = data.loc[pd.to_numeric(data["peak_dbfs"], errors="coerce") >= -35.0].copy()
+        dropped = before - len(data)
+        if dropped:
+            warnings.warn(
+                f"peak < -35 dBFS 인 클립 {dropped}개를 지표에서 제외했다 "
+                f"({dropped / before * 100:.1f}%).",
+                stacklevel=2,
+            )
+
     if "analysis_tier" in data.columns:
         # Real-instrument comparisons are only identified for conditions with
         # a matched real counterfactual. Generator-only rows remain available
