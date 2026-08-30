@@ -342,6 +342,12 @@ def _split_half_floor(real: np.ndarray, seed: int, repeats: int = 25) -> float:
     return float(np.median(values)) if values else 0.0
 
 
+# QC 를 못 돌렸을 때만 쓰는 대용 경계. 전수 분포에 골짜기가 없으므로 이 값은
+# 원리에서 나온 게 아니라 '아무것도 없는 것보다 낫다' 수준이다. QC 의 활성 구간
+# 검출을 쓸 수 있으면 언제나 그쪽이 옳다.
+PEAK_FALLBACK_DBFS = -35.0
+
+
 def _stable_key_seed(key: object) -> int:
     """Return a process-independent seed (Python's hash() is randomized)."""
     digest = hashlib.blake2b(repr(key).encode("utf-8"), digest_size=8).digest()
@@ -636,28 +642,49 @@ def run_metric_suite(
     # 다른 seed 로 재시도해 감추지만, 우리는 짝 실험을 지키려고 재시도를 껐다.
     # 그래서 실패율 자체가 결과가 된다(scripts/analyze_render_failures.py).
     # 다만 **지표 계산에서는 빼야 한다.** 실패율은 따로 보고한다.
-    if "render_grade" in data.columns:
+    #
+    # ⚠ 판정 기준의 우선순위가 중요하다. 전수 QC(18,432 클립)가 보여준 바로는
+    # peak_dbfs 분포에 골짜기가 없다 — -65 부근의 얕은 최소를 지나 -30 까지
+    # 단조 증가하는 연속 꼬리다. 표본 384개로 "골짜기"라고 본 것은 틀렸다.
+    # 게다가 검출기가 무음이라 한 클립과 소리가 있다고 한 클립의 peak 범위가
+    # 겹쳐서, **어떤 단일 peak 경계로도** 검출기 판정을 재현할 수 없다.
+    #
+    # 그래서 활성 구간 검출기(qc_reasons 의 near_silence)를 1순위로 쓴다.
+    # 그쪽은 조정 상수가 아니라 절대 기준이다 — 어떤 프레임 RMS 도
+    # -60 dBFS 를 못 넘으면 소리가 없는 것이다(audio.detect_active_region).
+    # peak 경계는 QC 를 아직 안 돌린 경우의 마지막 수단으로만 남긴다.
+    dropped_by = None
+    if "qc_reasons" in data.columns:
+        reasons = data["qc_reasons"].fillna("")
+        broken = reasons.str.contains(
+            "near_silence|missing_audio|non_finite_samples", regex=True
+        )
+        before = len(data)
+        data = data.loc[~broken].copy()
+        dropped_by = ("활성 구간 검출기", before - len(data), before)
+    elif "render_grade" in data.columns:
         before = len(data)
         data = data.loc[data["render_grade"].eq("ok")].copy()
-        dropped = before - len(data)
-        if dropped:
-            warnings.warn(
-                f"렌더 실패 클립 {dropped}개를 지표에서 제외했다 "
-                f"({dropped / before * 100:.1f}%). 실패율은 별도로 보고할 것 — "
-                "이건 결측이 아니라 관측 결과다.",
-                stacklevel=2,
-            )
+        dropped_by = ("render_grade", before - len(data), before)
     elif "peak_dbfs" in data.columns:
-        # render_grade 가 없으면 peak 로 즉석 판정한다(기준은 analyze_render_failures.py 와 동일).
         before = len(data)
-        data = data.loc[pd.to_numeric(data["peak_dbfs"], errors="coerce") >= -35.0].copy()
-        dropped = before - len(data)
-        if dropped:
-            warnings.warn(
-                f"peak < -35 dBFS 인 클립 {dropped}개를 지표에서 제외했다 "
-                f"({dropped / before * 100:.1f}%).",
-                stacklevel=2,
-            )
+        data = data.loc[
+            pd.to_numeric(data["peak_dbfs"], errors="coerce") >= PEAK_FALLBACK_DBFS
+        ].copy()
+        dropped_by = (
+            f"peak < {PEAK_FALLBACK_DBFS:.0f} dBFS (대용 기준 — QC 를 돌리는 편이 낫다)",
+            before - len(data),
+            before,
+        )
+
+    if dropped_by and dropped_by[1]:
+        criterion, dropped, before = dropped_by
+        warnings.warn(
+            f"렌더 실패 클립 {dropped}개를 지표에서 제외했다 "
+            f"({dropped / before * 100:.1f}%, 기준: {criterion}). "
+            "실패율은 별도로 보고할 것 — 이건 결측이 아니라 관측 결과다.",
+            stacklevel=2,
+        )
 
     if "analysis_tier" in data.columns:
         # Real-instrument comparisons are only identified for conditions with
