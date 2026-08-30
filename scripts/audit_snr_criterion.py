@@ -157,6 +157,66 @@ def boundary_disagreement(frame: pd.DataFrame) -> None:
             print("     검출기 판정을 재현할 수 없다. peak 임계값을 쓰면 안 된다.")
 
 
+def detector_contamination(frame: pd.DataFrame) -> None:
+    """검출기의 '무음' 판정이 오염됐는지 본다.
+
+    detect_active_region 의 문턱은
+
+        threshold = max(noise_rms * 10^(12/20),  10^(-60/20))
+
+    이고 noise_rms 는 **클립 앞 0.35 초**의 RMS 다. 설계상 첫 음은 0.75 초에
+    들어오므로 그 구간은 비어 있어야 한다. 그런데 VIOLET 이 0.35 초 안에
+    무언가를 내면 noise_rms 가 커지고, 문턱이 따라 올라가고, 어떤 프레임도
+    그걸 못 넘어서 **소리가 큰 클립이 '무음'으로 판정된다.**
+
+    전수 결과가 정확히 그 증상을 보였다: 검출기가 무음이라 한 클립의
+    peak 상위 25 % 가 -27.0 dBFS 이고 최대는 -10.6 dBFS 다. 그건 무음이 아니다.
+
+    그래서 '생성 실패 6.28 %' 는 그대로 쓸 수 없다. 진짜 무음과
+    '앞구간 오염으로 오판된 것'을 갈라야 한다.
+    """
+    if "qc_reasons" not in frame.columns or "noise_dbfs" not in frame.columns:
+        return
+    print()
+    print("=" * 74)
+    print("검출기 오염 — '무음' 판정이 앞 0.35 초에 좌우되는가")
+    print("=" * 74)
+    silent = frame["qc_reasons"].fillna("").str.contains("near_silence")
+    subset = frame.loc[silent].copy()
+    if subset.empty:
+        print("  무음 판정 클립이 없다.")
+        return
+    noise = pd.to_numeric(subset["noise_dbfs"], errors="coerce")
+    peak = pd.to_numeric(subset["peak_dbfs"], errors="coerce")
+    # 문턱은 noise + 12 dB 와 -60 dBFS 중 큰 쪽. 앞구간이 조용하면 -60 이 이긴다.
+    threshold_dbfs = np.maximum(noise + 12.0, ACTIVE_FLOOR_DBFS)
+    contaminated = threshold_dbfs > ACTIVE_FLOOR_DBFS + 0.01
+    print(f"  무음 판정 {len(subset):,} 개 중")
+    print(f"    앞 0.35 초가 조용해 절대 바닥(-60 dBFS)이 문턱이었다: "
+          f"{int((~contaminated).sum()):,}  <- 진짜 무음")
+    print(f"    앞 0.35 초에 소리가 있어 문턱이 올라갔다:              "
+          f"{int(contaminated.sum()):,}  <- 판정을 믿을 수 없다")
+    if int(contaminated.sum()):
+        print()
+        print("  문턱이 올라간 클립의 peak_dbfs 분위수")
+        for q in (0.5, 0.75, 0.95, 1.0):
+            print(f"    {q * 100:5.0f} %  {float(peak.loc[contaminated].quantile(q)):7.1f} dBFS")
+        loud = int((peak.loc[contaminated] > -30.0).sum())
+        print(f"  그 중 peak > -30 dBFS (명백히 소리가 있는 것): {loud:,}")
+        if loud:
+            print("  -> 이만큼은 **무음이 아닌데 무음으로 세어졌다.** 6.28 % 를 그대로")
+            print("     인용하면 안 된다. 절대 기준만 쓰는 재판정이 필요하다:")
+            print("     bash scripts/rescore_silence.sh  (프레임 RMS 최대값 vs -60 dBFS)")
+    print()
+    print("  ※ 앞 0.35 초는 설계상 비어 있어야 한다(note_onset_seconds = 0.75).")
+    print("     거기에 소리가 있다는 것 자체가 VIOLET 의 관측 가능한 성질이다.")
+    audible_noise = pd.to_numeric(
+        frame.loc[~silent, "noise_dbfs"], errors="coerce"
+    ).median()
+    print(f"     무음 판정 클립의 앞구간 중앙값 {float(noise.median()):.1f} dBFS "
+          f"vs 나머지 {float(audible_noise):.1f} dBFS")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default="expanded")
@@ -195,6 +255,7 @@ def main() -> int:
     decompose(audible)
     duty_cycle_confound(audible)
     boundary_disagreement(frame)
+    detector_contamination(frame)
     return 0
 
 

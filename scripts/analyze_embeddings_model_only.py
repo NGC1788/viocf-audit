@@ -393,7 +393,20 @@ def main() -> int:
         if gaps:
             table = pd.DataFrame(gaps)
             print(table.round(4).to_string(index=False))
+            # ⚠ gap_ratio 는 분모(predicted_norm)가 작으면 부풀어 오른다.
+            # legato_slur <-> sustain 처럼 임베딩상 거의 같은 주법 쌍이 그렇다
+            # (norm 0.21). 분모가 작은 쌍을 빼고도 결론이 유지되는지 함께 본다.
+            median_norm = float(table["predicted_norm"].median())
+            stable = table.loc[table["predicted_norm"] >= 0.5 * median_norm]
             mean_gap = float(table["gap_ratio"].mean())
+            if len(stable) < len(table):
+                print()
+                print(f"  분모가 작은 쌍 {len(table) - len(stable)}개를 빼면 "
+                      f"평균 간극비 {float(stable['gap_ratio'].mean()):.4f} "
+                      f"(전체 {mean_gap:.4f})")
+                report["compositionality_gap_ratio_trimmed"] = float(
+                    stable["gap_ratio"].mean()
+                )
             report["compositionality_gap_ratio_mean"] = mean_gap
             print()
             print(f"  평균 간극비 {mean_gap:.4f}  "
