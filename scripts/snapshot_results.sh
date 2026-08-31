@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# 결과 중 **작은 것만** 저장소에 남긴다 (드라이브가 또 죽어도 숫자는 산다).
+#
+# 왜: results/ 는 gitignore 다(특징표 18 MB, 오디오 32 GB — 전부 재생성 가능하니까).
+# 그런데 2026-08-31 에 NVMe 가 dead 상태로 떨어지면서 40시간치 생성물을 잃을 뻔했다.
+# 이번엔 ext4 셧다운 덕에 살았지만 다음은 모른다.
+#
+# 재생성 비용이 큰 것과 작은 것을 나눠 보면:
+#   오디오 33,600개   ~32 GB   GPU 40시간   -> 저장소에 못 넣는다. 시드가 결정적이라 재생성 가능.
+#   특징표             18 MB   CPU 15분    -> 안 넣는다. 오디오만 있으면 금방 나온다.
+#   요약 JSON·그림      < 1 MB   위 전부 필요 -> **이건 넣는다.** 여기 헤드라인 숫자가 다 들어 있다.
+#
+# 즉 이 스냅샷은 "재생성 비용 대비 용량이 압도적으로 싼 것"만 고른다.
+set -euo pipefail
+
+VIOCF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VIOCF_DEST="${VIOCF_ROOT}/docs/results_snapshot"
+cd "${VIOCF_ROOT}"
+mkdir -p "${VIOCF_DEST}"
+
+VIOCF_COPIED=0
+while IFS= read -r VIOCF_SRC; do
+  [[ -f "${VIOCF_SRC}" ]] || continue
+  VIOCF_REL="${VIOCF_SRC#results/}"
+  VIOCF_OUT="${VIOCF_DEST}/${VIOCF_REL}"
+  mkdir -p "$(dirname "${VIOCF_OUT}")"
+  cp -p "${VIOCF_SRC}" "${VIOCF_OUT}"
+  VIOCF_COPIED=$((VIOCF_COPIED + 1))
+done < <(
+  find results -type f \( \
+    -name 'metrics_summary.json' -o \
+    -name '*.summary.json' -o \
+    -name 'embedding_model_only_*.json' -o \
+    -name 'fig*.png' -o \
+    -name 'effect_alignment.csv' -o \
+    -name 'excess_leakage.csv' -o \
+    -name 'compositionality_gap.csv' -o \
+    -name 'monotonicity.csv' -o \
+    -name 'delayed_branch*.csv' -o \
+    -name 'embedding_c2st.csv' \
+  \) 2>/dev/null | sort
+)
+
+# 크기를 확인한다. 저장소를 부풀리면 이 장치의 취지가 무너진다.
+VIOCF_SIZE_KB="$(du -sk "${VIOCF_DEST}" | cut -f1)"
+echo "스냅샷 ${VIOCF_COPIED}개 파일, ${VIOCF_SIZE_KB} KB -> docs/results_snapshot/"
+if [[ "${VIOCF_SIZE_KB}" -gt 20480 ]]; then
+  echo "⚠ 20 MB 를 넘었다. 무엇이 커졌는지 보고 대상 목록을 좁힐 것:"
+  du -sk "${VIOCF_DEST}"/* | sort -rn | head -5
+  exit 1
+fi
+
+# 언제 무엇을 찍었는지 남긴다. 나중에 '이 숫자가 어느 실행에서 나왔나'를 답해야 한다.
+{
+  echo "# 결과 스냅샷"
+  echo
+  echo "생성: $(date '+%F %T')"
+  echo "커밋: $(git rev-parse --short HEAD)"
+  echo "파일: ${VIOCF_COPIED}개 (${VIOCF_SIZE_KB} KB)"
+  echo
+  echo "재생성 비용이 큰 것(오디오 32 GB / GPU 40시간, 특징표 18 MB)은 넣지 않는다."
+  echo "시드가 결정적이라 코드만 있으면 비트 단위로 동일하게 다시 만들 수 있다."
+  echo "여기 있는 것은 그 전부가 있어야 나오는 최종 요약이다."
+  echo
+  echo "## 목록"
+  echo
+  (cd "${VIOCF_DEST}" && find . -type f ! -name 'README.md' | sort | sed 's|^\./|- |')
+} > "${VIOCF_DEST}/README.md"
+
+echo "다음: git add docs/results_snapshot && git commit && git push"
