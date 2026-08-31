@@ -19,22 +19,31 @@ set -euo pipefail
 VIOCF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIOCF_LIMIT="${1:-0}"
 
+# ⚠ 워커 수를 낮게 잡는다. 기본값(코어수-2)으로 돌리면 코어를 다 먹어서
+# **같이 도는 GPU 생성 작업이 굶는다**(실제로 겪음 — GPU 56% -> 30% 로 떨어졌다).
+# VIOLET 은 dataloader 와 오디오 인코딩에 CPU 를 쓰므로 코어가 없으면 GPU 가 논다.
+# 이 작업은 15분짜리고 저쪽은 10시간짜리다. 여기를 양보하는 게 맞다.
+# GPU 작업이 없을 때는 VIOCF_WORKERS 를 높게 주면 된다.
+VIOCF_WORKERS="${VIOCF_WORKERS:-12}"
+
 cd "${VIOCF_ROOT}"
 [[ -f .venv/bin/activate ]] || { echo "먼저: bash scripts/bootstrap_analysis.sh"; exit 2; }
 source .venv/bin/activate
 
 for VIOCF_ARM in causal leaky; do
   echo "=============================================================="
-  echo "기준 렌더 — ${VIOCF_ARM}"
+  echo "기준 렌더 — ${VIOCF_ARM}  (워커 ${VIOCF_WORKERS}개)"
   echo "=============================================================="
   viocf render-reference \
     --manifest manifests/delayed_sweep/wc1p0.csv \
     --arm "${VIOCF_ARM}" \
     --limit "${VIOCF_LIMIT}" \
+    --workers "${VIOCF_WORKERS}" \
     --output "manifests/reference_${VIOCF_ARM}.csv"
 
   viocf features \
     --manifest "manifests/reference_${VIOCF_ARM}.csv" \
+    --workers "${VIOCF_WORKERS}" \
     --output "results/reference/${VIOCF_ARM}_features.csv"
 
   viocf metrics \
