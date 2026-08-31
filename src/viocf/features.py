@@ -297,6 +297,11 @@ def _pitch_features(
 
 # 무음 판정(절대 기준). 앞구간을 보지 않으므로 노이즈 추정 오염에 영향받지 않는다.
 # 프레이밍은 audio.detect_active_region 과 같게 둔다. 개정 11·13 참조.
+# 지연 실험의 분기 오프셋(design.py 의 branch_offset_s). 지연이 아닌 클립에서도
+# **같은 위치의 창**을 재서 비교 분모로 쓰기 위해 여기에 둔다. 둘이 어긋나면
+# 누출비가 무의미해지므로 값이 바뀌면 함께 바꿔야 한다.
+REFERENCE_BRANCH_OFFSET_S = 0.25
+
 SILENCE_FLOOR_DBFS = -60.0
 SILENCE_FRAME_SECONDS = 0.046
 SILENCE_HOP_SECONDS = 0.010
@@ -404,9 +409,25 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
     # note_onset_s 와 branch_offset_s 는 manifest 값이라 한 noise_group 안의
     # p/mf/f 가 **정확히 같다**. 여기에 창을 걸면 모든 조건이 같은 절대 시각을
     # 본다. 그러면 차이는 오직 오디오의 차이다.
+    #
+    # ⚠ 지연 클립이 아니어도 같은 창을 잰다.
+    #
+    # 왜: "피치카토가 가장 많이 샌다"는 주장에 명백한 반론이 있다 — 피치카토는
+    # 감쇠가 급해서 고정 창의 RMS 가 원래 더 민감하지 않냐는 것이다. 그걸 막으려면
+    # **같은 주법에서 '정당하게 달라도 되는' 경우의 크기**가 필요하다.
+    #
+    # 주 요인설계 클립은 CC1 이 처음부터 끝까지 상수라, 같은 창에서 p 와 f 가
+    # 다른 게 **정상**이다(조건이 애초에 다르므로). 그 크기를 분모로 쓰면
+    # 주법별 민감도가 약분된다.
+    #
+    #     누출비 = 지연 조건의 분기 전 차이 / 상수 조건의 같은 창 차이
+    #
+    # 지연 클립이 아니면 branch_offset_s 가 NaN 이므로, 창 정의에 쓸 기준 오프셋을
+    # 설계값(0.25 s)으로 둔다. 창 위치는 두 경우가 정확히 같아야 비교가 된다.
     notated_onset = _safe_float(metadata.get("note_onset_s"))
-    if np.isfinite(branch_offset) and np.isfinite(notated_onset):
-        notated_branch = notated_onset + branch_offset
+    window_offset = branch_offset if np.isfinite(branch_offset) else REFERENCE_BRANCH_OFFSET_S
+    if np.isfinite(notated_onset):
+        notated_branch = notated_onset + window_offset
         pre_abs = _segment(
             samples, sample_rate,
             notated_onset + 0.04,
@@ -417,12 +438,15 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
             "prebranch_abs_rms_dbfs": float(amplitude_to_db(rms(pre_abs))),
             "prebranch_abs_centroid_hz": pre_abs_spectral["spectral_centroid_hz"],
             "notated_branch_time_s": notated_branch,
+            # 이 창이 실제 분기점을 가리키는가, 아니면 비교용 기준 창인가.
+            "prebranch_window_is_branch": bool(np.isfinite(branch_offset)),
         })
     else:
         row.update({
             "prebranch_abs_rms_dbfs": math.nan,
             "prebranch_abs_centroid_hz": math.nan,
             "notated_branch_time_s": math.nan,
+            "prebranch_window_is_branch": False,
         })
 
     if np.isfinite(branch_offset) and np.isfinite(onset_time):
