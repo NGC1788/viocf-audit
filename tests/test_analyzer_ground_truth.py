@@ -337,3 +337,80 @@ def test_prebranch_window_is_anchored_to_notated_time(tmp_path):
     assert detected_spread > 1.0, (
         "검출 onset 기준이 가짜 누출을 만들지 않는다면 이 테스트의 전제가 바뀐 것이다"
     )
+
+
+def test_causal_reference_renderer_has_no_prebranch_leak(tmp_path):
+    """인과적 기준 렌더러는 분기 전이 **비트 단위로** 같아야 한다.
+
+    이 렌더러는 파이프라인 검증의 기준점이다. 여기가 깨지면 "VIOLET 의 분기 전
+    spread 2.03 dB 는 실재한다"는 주장의 근거가 사라진다.
+
+    처음 작성했을 때 비인과 경로가 **두 개** 있었고 이 계약이 잡아냈다:
+      - 전역 peak 정규화 (클립 전체 최대값 -> 미래가 과거 크기를 바꾼다)
+      - 음 전체 평균으로 잡은 brightness (분기 이후 CC1 이 분기 이전 음색에 섞인다)
+    둘 다 우리가 VIOLET 에서 재는 것과 같은 종류다. 그래서 이 테스트를 남긴다.
+    """
+    import numpy as np
+
+    from viocf.causal_reference import render
+    from viocf.midi import CCEvent, NoteEvent, write_violet_midi
+
+    rate = 24000
+    onset, branch_offset = 0.75, 0.25
+    branch = onset + branch_offset
+
+    waves = {}
+    for label, final_cc in (("p", 32), ("mf", 64), ("f", 96)):
+        path = tmp_path / f"{label}.mid"
+        write_violet_midi(
+            path,
+            (NoteEvent(69, onset, 3.0),),
+            36,
+            [CCEvent(0.0, 64), CCEvent(onset, 64), CCEvent(branch, final_cc)],
+            120,
+        )
+        waves[label] = render(
+            path, "sustain", sample_rate=rate, clip_seconds=5.0, seed=7
+        )
+
+    cut = int(branch * rate)
+    reference = waves["p"]
+    for label in ("mf", "f"):
+        assert np.array_equal(reference[:cut], waves[label][:cut]), (
+            f"분기 전 구간이 p 와 {label} 에서 다르다 — 렌더러에 비인과 경로가 있다"
+        )
+    # 대조: 분기 후에는 실제로 달라야 한다. 안 그러면 CC1 이 아무 일도 안 한 것이고
+    # 이 테스트는 아무것도 검증하지 못한다.
+    assert float(np.abs(reference[cut:] - waves["f"][cut:]).max()) > 1e-3
+
+
+def test_causal_reference_leaky_arm_actually_leaks(tmp_path):
+    """음성 대조: 일부러 넣은 누출은 분기 전에 나타나야 한다.
+
+    양성 대조만 있으면 '아무것도 검출 못 하는 파이프라인'과 구별되지 않는다.
+    """
+    import numpy as np
+
+    from viocf.causal_reference import render
+    from viocf.midi import CCEvent, NoteEvent, write_violet_midi
+
+    rate = 24000
+    onset, branch = 0.75, 1.00
+    waves = {}
+    for label, final_cc in (("p", 32), ("f", 96)):
+        path = tmp_path / f"{label}.mid"
+        write_violet_midi(
+            path,
+            (NoteEvent(69, onset, 3.0),),
+            36,
+            [CCEvent(0.0, 64), CCEvent(onset, 64), CCEvent(branch, final_cc)],
+            120,
+        )
+        waves[label] = render(
+            path, "sustain", sample_rate=rate, clip_seconds=5.0, seed=7,
+            leak_seconds=0.6,
+        )
+    cut = int(branch * rate)
+    assert not np.array_equal(waves["p"][:cut], waves["f"][:cut]), (
+        "누출을 넣었는데 분기 전이 같다 — 음성 대조가 성립하지 않는다"
+    )

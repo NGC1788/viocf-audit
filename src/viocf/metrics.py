@@ -729,6 +729,15 @@ def run_metric_suite(
             stacklevel=2,
         )
 
+    # ⚠ 지연 분기 검정은 **모델 단독**이라 tier 필터 앞의 자료를 써야 한다.
+    #
+    # analysis_tier 필터는 실연주 짝이 없는 행이 CEA/HCEL/CG 에 몰래 섞이는 것을
+    # 막으려고 있다. 그런데 delayed_branch_* 는 설계상 실연주 기준선을 쓰지 않는다
+    # (사람은 "250 ms 뒤부터 f" 를 연주할 수 없다 — delayed_branch_strict 주석 참조).
+    # 거기까지 필터를 걸면 generator_only_exploratory 로 표시된 확장 스윕
+    # 8,640 클립이 통째로 사라진다(실제로 겪음 — 요약에 지연 블록이 아예 없었다).
+    model_scope = data.copy()
+
     if "analysis_tier" in data.columns:
         # Real-instrument comparisons are only identified for conditions with
         # a matched real counterfactual. Generator-only rows remain available
@@ -760,8 +769,8 @@ def run_metric_suite(
         compositionality_gap(interactions, features) if not interactions.empty else pd.DataFrame()
     )
     monotonicity = monotonicity_summary(data)
-    delayed = delayed_branch_metrics(data)
-    delayed_strict = delayed_branch_strict_model_leak(data)
+    delayed = delayed_branch_metrics(model_scope)
+    delayed_strict = delayed_branch_strict_model_leak(model_scope)
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)

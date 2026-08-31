@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -124,6 +125,69 @@ def command_segment(args: argparse.Namespace) -> None:
         )
         completed.append(str(destination))
     _json_print({"segments_written": len(completed), "paths": completed})
+
+
+# 음성 대조에서 CC1 을 얼마나 미리 당길 것인가. 가장 짧은 분기 오프셋(0.25 s)보다
+# 확실히 커야 분기 전 구간에 실제로 스며든다.
+REFERENCE_LEAK_SECONDS = 0.6
+
+
+def _render_reference_one(job: tuple[dict, str, float, int, float, str]) -> dict:
+    import soundfile as sf
+
+    from .causal_reference import render
+
+    record, arm, leak, rate, clip_seconds, output_dir = job
+    samples = render(
+        record["midi_path"], str(record["technique"]),
+        sample_rate=rate, clip_seconds=clip_seconds,
+        seed=int(record["seed"]), leak_seconds=leak,
+    )
+    path = Path(output_dir) / f"{record['clip_id']}.wav"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(path, samples, rate)
+    row = dict(record)
+    row["audio_path"] = str(path)
+    row["source"] = "model"
+    row["reference_arm"] = arm
+    return row
+
+
+def command_render_reference(args: argparse.Namespace) -> None:
+    from concurrent.futures import ProcessPoolExecutor
+
+    config, root = _config_and_root(args.config)
+    manifest = pd.read_csv(args.manifest)
+    if args.limit and args.limit > 0:
+        # noise_group 통째로 잘라야 짝이 깨지지 않는다.
+        keep = manifest["noise_group"].drop_duplicates().head(
+            max(1, args.limit // 3)
+        )
+        manifest = manifest.loc[manifest["noise_group"].isin(keep)]
+    leak = REFERENCE_LEAK_SECONDS if args.arm == "leaky" else 0.0
+    output_dir = str(root / "data" / "reference_audio" / args.arm)
+    jobs = [
+        (record, args.arm, leak, config.sample_rate, config.clip_seconds, output_dir)
+        for record in manifest.to_dict(orient="records")
+    ]
+    workers = args.workers or max(1, (os.cpu_count() or 2) - 2)
+    rows: list[dict] = []
+    if workers <= 1:
+        rows = [_render_reference_one(job) for job in jobs]
+    else:
+        os.environ.setdefault("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            for done, row in enumerate(
+                pool.map(_render_reference_one, jobs, chunksize=8), start=1
+            ):
+                rows.append(row)
+                if done % 500 == 0:
+                    print(f"  기준 렌더 {done:,}/{len(jobs):,}", file=sys.stderr, flush=True)
+    frame = pd.DataFrame(rows)
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(args.output, index=False)
+    _json_print({"arm": args.arm, "rows": len(frame), "leak_seconds": leak,
+                 "output": str(Path(args.output).resolve())})
 
 
 def command_make_delayed_sweep(args: argparse.Namespace) -> None:
@@ -275,6 +339,18 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = subparsers.add_parser("preflight", help="Check server/GPU/disk/software")
     preflight.add_argument("--output")
     preflight.set_defaults(func=command_preflight)
+
+    reference = subparsers.add_parser(
+        "render-reference",
+        help="인과적 기준 렌더러로 오디오를 만든다 (파이프라인 검증용)",
+    )
+    reference.add_argument("--config", default="configs/experiment.yaml")
+    reference.add_argument("--manifest", required=True)
+    reference.add_argument("--arm", choices=("causal", "leaky"), default="causal")
+    reference.add_argument("--limit", type=int, default=0, help="0 이면 전부")
+    reference.add_argument("--output", required=True)
+    reference.add_argument("--workers", type=int, default=None)
+    reference.set_defaults(func=command_render_reference)
 
     delayed_sweep = subparsers.add_parser(
         "make-delayed-sweep",
