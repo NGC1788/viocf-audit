@@ -424,8 +424,19 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
     #
     # 지연 클립이 아니면 branch_offset_s 가 NaN 이므로, 창 정의에 쓸 기준 오프셋을
     # 설계값(0.25 s)으로 둔다. 창 위치는 두 경우가 정확히 같아야 비교가 된다.
+    #
+    # ⚠ 창 길이를 **고정**한다. 분기 오프셋을 따라 늘리면 안 된다.
+    #
+    # 분기 거리를 여러 값으로 쓸 때(0.25 / 0.50 / 1.00 / 1.75 / 3.00 s), 창을
+    # [onset, branch] 로 잡으면 오프셋이 커질수록 창이 길어진다. 그러면 오프셋별
+    # 누출 크기를 비교할 수 없다 — 다른 길이의 구간을 잰 값이기 때문이다.
+    # 항상 REFERENCE_BRANCH_OFFSET_S 만큼만 재면 모든 조건이 **같은 구간**을 본다.
+    # (오프셋 0.25 에서는 기존과 완전히 동일하므로 지금까지의 수치는 영향 없다)
     notated_onset = _safe_float(metadata.get("note_onset_s"))
-    window_offset = branch_offset if np.isfinite(branch_offset) else REFERENCE_BRANCH_OFFSET_S
+    window_offset = min(
+        branch_offset if np.isfinite(branch_offset) else REFERENCE_BRANCH_OFFSET_S,
+        REFERENCE_BRANCH_OFFSET_S,
+    )
     if np.isfinite(notated_onset):
         notated_branch = notated_onset + window_offset
         pre_abs = _segment(
@@ -438,6 +449,7 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
             "prebranch_abs_rms_dbfs": float(amplitude_to_db(rms(pre_abs))),
             "prebranch_abs_centroid_hz": pre_abs_spectral["spectral_centroid_hz"],
             "notated_branch_time_s": notated_branch,
+            "prebranch_window_s": float(window_offset),
             # 이 창이 실제 분기점을 가리키는가, 아니면 비교용 기준 창인가.
             "prebranch_window_is_branch": bool(np.isfinite(branch_offset)),
         })

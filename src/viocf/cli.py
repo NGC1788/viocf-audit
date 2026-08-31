@@ -126,6 +126,15 @@ def command_segment(args: argparse.Namespace) -> None:
     _json_print({"segments_written": len(completed), "paths": completed})
 
 
+def command_make_delayed_sweep(args: argparse.Namespace) -> None:
+    from .delayed_sweep import create_delayed_sweep, plan_size
+
+    config, _ = _config_and_root(args.config)
+    plan = plan_size(args.replicates)
+    outputs = create_delayed_sweep(config, replicates=args.replicates)
+    _json_print({"plan": plan, "manifests": {k: str(v) for k, v in outputs.items()}})
+
+
 def command_qc(args: argparse.Namespace) -> None:
     config, root = _config_and_root(args.config)
     frame = qc_manifest(args.manifest, args.output, root, config.raw, workers=args.workers)
@@ -266,6 +275,14 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = subparsers.add_parser("preflight", help="Check server/GPU/disk/software")
     preflight.add_argument("--output")
     preflight.set_defaults(func=command_preflight)
+
+    delayed_sweep = subparsers.add_parser(
+        "make-delayed-sweep",
+        help="지연 분기 확장 설계 (분기 오프셋 x 주법부류 x w_cc)",
+    )
+    delayed_sweep.add_argument("--config", default="configs/experiment.yaml")
+    delayed_sweep.add_argument("--replicates", type=int, default=32)
+    delayed_sweep.set_defaults(func=command_make_delayed_sweep)
 
     design = subparsers.add_parser("make-design", help="Generate MIDI and factorial manifests")
     design.add_argument("--profile", choices=["pilot", "full", "expanded"], default="pilot")
