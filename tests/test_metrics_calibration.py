@@ -338,3 +338,45 @@ def test_delayed_branch_does_not_count_unmeasurable_groups_as_leaks():
     measured = result.loc[result["measurable"]]
     assert len(measured) == 2, "측정 불가 그룹이 분모에 남았다"
     assert int(measured["prebranch_identical"].sum()) == 1
+
+
+def test_delayed_branch_metrics_uses_notated_window():
+    """delayed_branch_metrics 도 악보 시각 기준 창을 써야 한다.
+
+    strict 검정만 고치고 이쪽을 빠뜨리면 같은 요약 안에 서로 다른 정의의
+    '분기 전'이 섞인다. 두 열을 모순되게 채워 넣고, 악보 시각 쪽 값이 쓰이는지
+    본다(검출 기준 열에는 일부러 큰 차이를 심어 둔다 — 그쪽이 쓰이면 티가 난다).
+    """
+    from viocf.metrics import delayed_branch_metrics
+
+    rows = []
+    for replicate in range(4):
+        for dynamic, abs_rms, detected_rms in (("p", -20.0, -20.0), ("f", -20.0, -5.0)):
+            rows.append({
+                "profile": "delayed",
+                "source": "model",
+                "prompt_id": "delayed_A4",
+                "technique": "pizzicato",
+                "replicate": replicate,
+                "noise_group": f"g{replicate}",
+                "dynamic_label": dynamic,
+                # 악보 시각 기준: p 와 f 가 같다 -> future_leak 은 0 이어야 한다
+                "prebranch_abs_rms_dbfs": abs_rms,
+                "prebranch_abs_centroid_hz": 900.0,
+                # 검출 onset 기준: 큰 차이를 심어 둔다 -> 이게 쓰이면 0 이 안 나온다
+                "prebranch_rms_dbfs": detected_rms,
+                "prebranch_centroid_hz": 900.0 + (0.0 if dynamic == "p" else 400.0),
+                "postbranch_rms_dbfs": -20.0 if dynamic == "p" else -12.0,
+                "postbranch_centroid_hz": 1000.0,
+            })
+    frame = pd.DataFrame(rows)
+
+    result = delayed_branch_metrics(frame)
+    assert not result.empty
+    per_unit = result.loc[result["technique"].eq("pizzicato")]
+    assert (per_unit["future_leak"] < 1e-9).all(), (
+        "악보 시각 기준으로는 분기 전이 동일한데 future_leak 이 0 이 아니다 "
+        "— 검출 onset 기준 열이 쓰이고 있다"
+    )
+    # 대조: 실제 효과는 잡혀야 한다. 안 잡히면 이 테스트가 아무것도 검증 못 한다.
+    assert (per_unit["post_effect"] > 0).all()

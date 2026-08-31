@@ -513,3 +513,47 @@ p = 0.0041.
 ⚠ 이 결과는 개정 21 의 창 문제와 **무관하다.** `silent_absolute` 는 클립 전체에
 절대 기준을 적용한 값이라 창 정렬에 영향받지 않는다. 재계산이 필요한 것은
 spread 크기이지 이 발견이 아니다.
+
+## 개정 23 — 창 수정 후 결과, 그리고 남은 한 곳
+
+### 수정 후 헤드라인 (악보 시각 기준)
+
+    noise_groups_measured      51
+    noise_groups_unmeasurable   0
+    identical_groups            0
+    median_spread   rms  2.03 dB   centroid  120.6 Hz
+    max_spread      rms 27.93 dB   centroid 1627.9 Hz
+
+**결론은 유지된다.** 측정 가능한 51개 그룹 전부에서 분기 전 구간이 조건에 따라
+다르다. 창을 고친 뒤 최대값은 21.1 → 27.9 dB 로 오히려 **커졌다** — 창 어긋남이
+값을 부풀리고 있던 게 아니라 일부에서 가리고 있었다.
+
+**보고할 수치는 중앙값 2.03 dB 다.** 최대 27.9 dB 는 이상치 하나에 좌우되므로
+헤드라인으로 쓰면 안 된다. 인과적 생성기라면 0.00 이어야 하는 값이다.
+
+`unmeasurable` 이 0인 이유: `prebranch_abs_*` 는 악보 시각에만 의존하므로 무음
+클립에서도 값이 나온다. 무음 클립은 그보다 앞서 지표 계산 단계에서 제외되고,
+그 결과 강약이 1개만 남은 그룹은 `len(cells) < 2` 로 걸러진다. 51 은
+`delayed_branch_feasibility.py` 가 낸 51 과 일치한다.
+
+### 같은 실수를 한 곳 더 하고 있었다
+
+`delayed_branch_strict_model_leak` 만 고치고 `delayed_branch_metrics` 를 빠뜨렸다.
+그쪽은 계속 검출 onset 기준 열을 쓰고 있었으므로, 같은 요약 파일 안에 **서로 다른
+정의의 '분기 전'이 섞여 있었다.** 둘 다 악보 시각 기준을 우선하도록 맞췄다.
+회귀 테스트 `test_delayed_branch_metrics_uses_notated_window` 가 고정한다 —
+두 열에 모순된 값을 심어 두고, 악보 시각 쪽이 쓰이는지 확인한다.
+
+따라서 아래 값은 **창 수정 전 수치이며 재계산해야 한다**:
+
+    pizzicato  future_leak 0.764  post_effect 0.662
+    sustain    future_leak 0.575  post_effect 0.462
+
+⚠ 재계산 후에도 `future_leak > post_effect` 가 유지된다면 그건 강한 진술이 된다 —
+과거로 새는 양이 의도한 미래 효과보다 크다는 뜻이다. 지금은 아직 말할 수 없다.
+
+### 집계 행의 future_leak 을 채웠다
+
+`sustain_minus_pizzicato` 행의 `future_leak` 이 이유 없이 NaN 이었다. 이 대비가
+핵심이다 — 피치카토는 줄을 놓은 뒤라 **정당한 미래 효과가 없으므로** 누출이 더
+두드러져야 한다. 차이를 계산해 채웠다.

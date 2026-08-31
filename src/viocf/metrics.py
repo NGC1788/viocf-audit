@@ -485,7 +485,17 @@ def delayed_branch_metrics(frame: pd.DataFrame) -> pd.DataFrame:
     delayed = frame.loc[frame["profile"].eq("delayed")].copy()
     if delayed.empty:
         return pd.DataFrame()
-    prefix_features = [name for name in ("prebranch_rms_dbfs", "prebranch_centroid_hz") if name in delayed]
+    # ⚠ 여기도 악보 시각 기준을 우선한다. strict 검정만 고치고 이쪽을 빠뜨리면
+    # 같은 표에 서로 다른 정의의 '분기 전'이 섞인다(실제로 그럴 뻔했다).
+    # 검출 onset 기준 창은 onset 검출이 흔들리면 함께 움직여 가짜 차이를 만든다 —
+    # 실측 6.73 dB, 개정 21 참조.
+    prefix_absolute = [
+        name for name in ("prebranch_abs_rms_dbfs", "prebranch_abs_centroid_hz")
+        if name in delayed
+    ]
+    prefix_features = prefix_absolute or [
+        name for name in ("prebranch_rms_dbfs", "prebranch_centroid_hz") if name in delayed
+    ]
     post_features = [name for name in ("postbranch_rms_dbfs", "postbranch_centroid_hz") if name in delayed]
     requested = prefix_features + post_features
     scales = _real_robust_scales(delayed, requested)
@@ -528,7 +538,13 @@ def delayed_branch_metrics(frame: pd.DataFrame) -> pd.DataFrame:
                     "prompt_id": "delayed_A4",
                     "technique": "sustain_minus_pizzicato",
                     "unit_id": "aggregate",
-                    "future_leak": math.nan,
+                    # future_leak 차이도 낸다. 예전엔 이유 없이 NaN 이었는데,
+                    # 이 대비야말로 핵심이다 — 피치카토는 줄을 놓은 뒤라 정당한
+                    # 미래 효과가 없으므로 누출이 더 두드러져야 한다.
+                    "future_leak": float(
+                        means.loc[(source, "sustain"), "future_leak"]
+                        - means.loc[(source, "pizzicato"), "future_leak"]
+                    ),
                     "post_effect": float(
                         means.loc[(source, "sustain"), "post_effect"]
                         - means.loc[(source, "pizzicato"), "post_effect"]
