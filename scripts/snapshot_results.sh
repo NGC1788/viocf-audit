@@ -18,9 +18,21 @@ VIOCF_DEST="${VIOCF_ROOT}/docs/results_snapshot"
 cd "${VIOCF_ROOT}"
 mkdir -p "${VIOCF_DEST}"
 
+# 파일 하나당 상한. 이름만으로 고르면 '요약'이라는 이름의 큰 파일이 섞인다 —
+# collect_*.summary.json 이 실제로 956 KB 였고 전체 상한에 걸려서 알았다.
+# 크기로도 한 번 더 거르면 앞으로 무엇이 추가돼도 안전하다.
+VIOCF_MAX_FILE_KB=512
+
 VIOCF_COPIED=0
+VIOCF_SKIPPED=""
 while IFS= read -r VIOCF_SRC; do
   [[ -f "${VIOCF_SRC}" ]] || continue
+  VIOCF_KB="$(du -k "${VIOCF_SRC}" | cut -f1)"
+  if [[ "${VIOCF_KB}" -gt "${VIOCF_MAX_FILE_KB}" ]]; then
+    VIOCF_SKIPPED="${VIOCF_SKIPPED}  ${VIOCF_SRC} (${VIOCF_KB} KB)
+"
+    continue
+  fi
   VIOCF_REL="${VIOCF_SRC#results/}"
   VIOCF_OUT="${VIOCF_DEST}/${VIOCF_REL}"
   mkdir -p "$(dirname "${VIOCF_OUT}")"
@@ -29,7 +41,7 @@ while IFS= read -r VIOCF_SRC; do
 done < <(
   find results -type f \( \
     -name 'metrics_summary.json' -o \
-    -name '*.summary.json' -o \
+    -name '*_qc.summary.json' -o \
     -name 'embedding_model_only_*.json' -o \
     -name 'fig*.png' -o \
     -name 'effect_alignment.csv' -o \
@@ -44,6 +56,11 @@ done < <(
 # 크기를 확인한다. 저장소를 부풀리면 이 장치의 취지가 무너진다.
 VIOCF_SIZE_KB="$(du -sk "${VIOCF_DEST}" | cut -f1)"
 echo "스냅샷 ${VIOCF_COPIED}개 파일, ${VIOCF_SIZE_KB} KB -> docs/results_snapshot/"
+if [[ -n "${VIOCF_SKIPPED}" ]]; then
+  # 말없이 자르지 않는다 — 무엇이 빠졌는지 보이지 않으면 '전부 담았다'로 읽힌다.
+  echo "크기 상한(${VIOCF_MAX_FILE_KB} KB)으로 제외:"
+  printf '%s' "${VIOCF_SKIPPED}"
+fi
 if [[ "${VIOCF_SIZE_KB}" -gt 20480 ]]; then
   echo "⚠ 20 MB 를 넘었다. 무엇이 커졌는지 보고 대상 목록을 좁힐 것:"
   du -sk "${VIOCF_DEST}"/* | sort -rn | head -5

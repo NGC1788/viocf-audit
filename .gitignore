@@ -8,9 +8,13 @@ logs/**
 data/model_audio/**
 data/real_raw/**
 data/real_48k/**
+# 인과 기준 렌더러 출력. 검증용이고 코드로 즉시 재생성된다(결정적).
+# ⚠ 이게 없어서 WAV 360개(115 MB)가 커밋된 적이 있다.
+data/reference_audio/**
 !data/model_audio/.gitkeep
 !data/real_raw/.gitkeep
 !data/real_48k/.gitkeep
+!data/reference_audio/.gitkeep
 results/**
 !results/.gitkeep
 vendor/
