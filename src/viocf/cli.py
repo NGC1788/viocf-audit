@@ -127,9 +127,25 @@ def command_segment(args: argparse.Namespace) -> None:
     _json_print({"segments_written": len(completed), "paths": completed})
 
 
-# 음성 대조에서 CC1 을 얼마나 미리 당길 것인가. 가장 짧은 분기 오프셋(0.25 s)보다
-# 확실히 커야 분기 전 구간에 실제로 스며든다.
-REFERENCE_LEAK_SECONDS = 0.6
+# 음성 대조에서 주입한 누출이 **어디에 떨어져야 하는가**.
+#
+# ⚠ 처음엔 "0.6 초 미리 당긴다"는 고정값을 썼는데 틀렸다.
+#    측정 창은 [onset+0.04, onset+0.23] 으로 고정돼 있고, 분기 오프셋은
+#    0.25 ~ 3.00 s 로 넓다. 0.6 초를 당겨도 분기가 멀면 여전히 창 뒤에 떨어진다.
+#
+#      오프셋 0.25 -> 분기 1.00 -> 당기면 0.40   창 안 ✓
+#      오프셋 0.50 -> 분기 1.25 -> 당기면 0.65   창 안 ✓
+#      오프셋 1.00 -> 분기 1.75 -> 당기면 1.15   창 밖 ✗
+#      오프셋 1.75 -> 분기 2.50 -> 당기면 1.90   창 밖 ✗
+#      오프셋 3.00 -> 분기 3.75 -> 당기면 3.15   창 밖 ✗
+#
+#    전수 실행에서 정확히 이 비율이 나왔다: 960 그룹 중 384 검출 / 576 '동일'
+#    (= 5개 오프셋 중 2개 × 192). 파이프라인이 못 잡은 게 아니라 **창 안에 넣은
+#    게 없었다.** 대조가 잘못 설계된 것이다.
+#
+# 그래서 클립마다 `branch_offset - LEAK_LANDS_AFTER_ONSET_S` 만큼 당긴다.
+# 그러면 주입 시점이 오프셋과 무관하게 항상 onset+0.10 (창 한가운데)이 된다.
+LEAK_LANDS_AFTER_ONSET_S = 0.10
 
 
 def _render_reference_one(job: tuple[dict, str, float, int, float, str]) -> dict:
@@ -164,12 +180,18 @@ def command_render_reference(args: argparse.Namespace) -> None:
             max(1, args.limit // 3)
         )
         manifest = manifest.loc[manifest["noise_group"].isin(keep)]
-    leak = REFERENCE_LEAK_SECONDS if args.arm == "leaky" else 0.0
     output_dir = str(root / "data" / "reference_audio" / args.arm)
-    jobs = [
-        (record, args.arm, leak, config.sample_rate, config.clip_seconds, output_dir)
-        for record in manifest.to_dict(orient="records")
-    ]
+    jobs = []
+    for record in manifest.to_dict(orient="records"):
+        if args.arm == "leaky":
+            # 오프셋이 얼마든 주입 시점이 창 안(onset+0.10)에 오도록 맞춘다.
+            offset = float(record.get("branch_offset_s") or 0.0)
+            leak = max(0.0, offset - LEAK_LANDS_AFTER_ONSET_S)
+        else:
+            leak = 0.0
+        jobs.append(
+            (record, args.arm, leak, config.sample_rate, config.clip_seconds, output_dir)
+        )
     workers = args.workers or max(1, (os.cpu_count() or 2) - 2)
     rows: list[dict] = []
     if workers <= 1:
@@ -186,7 +208,12 @@ def command_render_reference(args: argparse.Namespace) -> None:
     frame = pd.DataFrame(rows)
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.output, index=False)
-    _json_print({"arm": args.arm, "rows": len(frame), "leak_seconds": leak,
+    leaks = sorted({round(job[2], 3) for job in jobs})
+    _json_print({"arm": args.arm, "rows": len(frame), "leak_seconds": leaks,
+                 "leak_lands_at_s": (
+                     None if args.arm != "leaky"
+                     else f"onset+{LEAK_LANDS_AFTER_ONSET_S}"
+                 ),
                  "output": str(Path(args.output).resolve())})
 
 

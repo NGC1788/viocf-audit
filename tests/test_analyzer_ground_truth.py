@@ -414,3 +414,60 @@ def test_causal_reference_leaky_arm_actually_leaks(tmp_path):
     assert not np.array_equal(waves["p"][:cut], waves["f"][:cut]), (
         "누출을 넣었는데 분기 전이 같다 — 음성 대조가 성립하지 않는다"
     )
+
+
+@pytest.mark.parametrize("branch_offset", [0.25, 1.00, 3.00])
+def test_negative_control_lands_inside_measurement_window(tmp_path, branch_offset):
+    """음성 대조의 누출은 **모든 분기 오프셋에서** 측정 창 안에 떨어져야 한다.
+
+    처음엔 "0.6 초 미리 당긴다"는 고정값을 썼다. 측정 창은
+    [onset+0.04, onset+0.23] 로 고정인데 분기 오프셋은 0.25~3.00 s 라,
+    분기가 멀면 당겨도 여전히 창 뒤에 떨어졌다.
+
+    전수 실행에서 정확히 그 비율이 나왔다 — 960 그룹 중 576 이 '동일'
+    (= 5개 오프셋 중 창에 닿지 않는 3개 × 192). 파이프라인이 못 잡은 게 아니라
+    **창 안에 넣은 게 없었다.** 대조가 틀렸던 것이다.
+
+    이제 클립마다 `branch_offset - LEAK_LANDS_AFTER_ONSET_S` 만큼 당겨서
+    주입 시점이 항상 onset+0.10 이 된다.
+    """
+    import numpy as np
+
+    from viocf.causal_reference import render
+    from viocf.cli import LEAK_LANDS_AFTER_ONSET_S
+    from viocf.midi import CCEvent, NoteEvent, write_violet_midi
+
+    rate = 24000
+    onset = 0.75
+    window = (onset + 0.04, onset + 0.23)   # features 의 분기 전 창과 같아야 한다
+    leak = max(0.0, branch_offset - LEAK_LANDS_AFTER_ONSET_S)
+
+    def render_pair(leak_seconds: float) -> float:
+        waves = {}
+        for label, final_cc in (("p", 32), ("f", 96)):
+            path = tmp_path / f"{label}_{branch_offset}_{leak_seconds}.mid"
+            write_violet_midi(
+                path,
+                (NoteEvent(69, onset, 6.0),),
+                36,
+                [
+                    CCEvent(0.0, 64),
+                    CCEvent(onset, 64),
+                    CCEvent(onset + branch_offset, final_cc),
+                ],
+                120,
+            )
+            waves[label] = render(
+                path, "sustain", sample_rate=rate, clip_seconds=10.0,
+                seed=5, leak_seconds=leak_seconds,
+            )
+        start, stop = int(window[0] * rate), int(window[1] * rate)
+        return float(np.abs(waves["p"][start:stop] - waves["f"][start:stop]).max())
+
+    assert render_pair(0.0) == 0.0, (
+        f"오프셋 {branch_offset}s: 인과적 렌더인데 분기 전 창이 다르다"
+    )
+    assert render_pair(leak) > 1e-4, (
+        f"오프셋 {branch_offset}s: 주입한 누출이 창 밖에 떨어졌다 "
+        f"(당김 {leak:.2f}s). 음성 대조가 성립하지 않는다"
+    )
