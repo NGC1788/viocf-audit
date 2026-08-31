@@ -123,6 +123,17 @@ PY
   VIOCF_RUN_ID="dsweep_${VIOCF_KEY}"
   VIOCF_RUN_DIR="${VIOCF_ROOT}/logs/violet/${VIOCF_PROFILE}/${VIOCF_RUN_ID}"
   echo "[${VIOCF_INDEX}/${VIOCF_TOTAL}] ${VIOCF_KEY} — ${VIOCF_COUNT} 클립 (w_cc=${VIOCF_WC})"
+
+  # ⚠ 상태파일에 done 이 없는 조각은 **정의상 미완성**이다. 그 실행 디렉터리에는
+  # 중간에 끊긴 기록만 들어 있고, run_violet.sh 는 재사용을 거부한다
+  # ("Run directory is not empty ... can duplicate JSONL records" — 옳은 판단이다).
+  # 여기서 지워야 재시도가 성립한다. done 인 조각은 위에서 이미 건너뛰었으므로
+  # 이 지점에 도달했다는 것 자체가 '다시 만들어도 된다'는 뜻이다.
+  # (2026-08-31 디스크 장애로 중단된 뒤 재시작이 여기서 막혔다)
+  if [[ -d "${VIOCF_RUN_DIR}" ]]; then
+    echo "  미완성 실행 디렉터리 제거: ${VIOCF_RUN_DIR}"
+    rm -rf "${VIOCF_RUN_DIR}"
+  fi
   VIOCF_STARTED="$(date +%s)"
 
   VIOCF_MIDI_DIR_OVERRIDE="${VIOCF_STAGE}" \
