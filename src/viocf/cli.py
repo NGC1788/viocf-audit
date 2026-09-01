@@ -129,23 +129,28 @@ def command_segment(args: argparse.Namespace) -> None:
 
 # 음성 대조에서 주입한 누출이 **어디에 떨어져야 하는가**.
 #
-# ⚠ 처음엔 "0.6 초 미리 당긴다"는 고정값을 썼는데 틀렸다.
-#    측정 창은 [onset+0.04, onset+0.23] 으로 고정돼 있고, 분기 오프셋은
-#    0.25 ~ 3.00 s 로 넓다. 0.6 초를 당겨도 분기가 멀면 여전히 창 뒤에 떨어진다.
+# 두 번 틀렸고 두 번 다 전수 실행이 잡아냈다. 기록해 둔다.
 #
-#      오프셋 0.25 -> 분기 1.00 -> 당기면 0.40   창 안 ✓
-#      오프셋 0.50 -> 분기 1.25 -> 당기면 0.65   창 안 ✓
-#      오프셋 1.00 -> 분기 1.75 -> 당기면 1.15   창 밖 ✗
-#      오프셋 1.75 -> 분기 2.50 -> 당기면 1.90   창 밖 ✗
-#      오프셋 3.00 -> 분기 3.75 -> 당기면 3.15   창 밖 ✗
+# 1차: "0.6 초 미리 당긴다" 고정값.
+#   측정 창은 [onset+0.04, onset+0.23] 고정인데 분기 오프셋은 0.25~3.00 s 라,
+#   분기가 멀면 당겨도 창 뒤에 떨어졌다. 960 중 576 이 '동일'로 나왔고
+#   그 값이 정확히 '창에 닿지 않는 오프셋 3개 x 192' 였다.
 #
-#    전수 실행에서 정확히 이 비율이 나왔다: 960 그룹 중 384 검출 / 576 '동일'
-#    (= 5개 오프셋 중 2개 × 192). 파이프라인이 못 잡은 게 아니라 **창 안에 넣은
-#    게 없었다.** 대조가 잘못 설계된 것이다.
+# 2차: "오프셋과 무관하게 onset+0.10 에 떨어뜨린다".
+#   오프셋 편향은 사라졌는데 이번엔 **오프셋마다 정확히 절반(96/192)** 이 '동일'
+#   이었다. 192 = 6주법 x 32반복 이므로 96 = 3주법 — 줄이 풀리는 주법
+#   (pizzicato/spiccato/staccato) 쪽이다.
 #
-# 그래서 클립마다 `branch_offset - LEAK_LANDS_AFTER_ONSET_S` 만큼 당긴다.
-# 그러면 주입 시점이 오프셋과 무관하게 항상 onset+0.10 (창 한가운데)이 된다.
-LEAK_LANDS_AFTER_ONSET_S = 0.10
+#   그 주법들은 **음 시작 시점의 CC1 로 감쇠가 정해지고 이후 변화에 반응하지
+#   않는다**(튕긴 줄은 손잡이를 돌려도 다시 안 커진다 — 일부러 그렇게 만든
+#   물리다). onset+0.10 은 음이 시작된 **뒤**라서 그 주법들에는 애초에
+#   주입이 되지 않았다. 파이프라인이 못 잡은 게 아니라 넣은 게 없었다.
+#
+# 그래서 **음 시작 앞**에 떨어뜨린다. 그러면
+#   - 활 주법: 창 [onset+0.04, ...] 이 바뀐다 (평활 시정수 20 ms 라 충분히 안정)
+#   - 감쇠 주법: 시작 시점 CC1 이 바뀌어 튕김 자체가 달라진다
+# 양쪽 모두 창 안에 차이가 생긴다.
+LEAK_LANDS_BEFORE_ONSET_S = 0.05
 
 
 def _render_reference_one(job: tuple[dict, str, float, int, float, str]) -> dict:
@@ -184,9 +189,10 @@ def command_render_reference(args: argparse.Namespace) -> None:
     jobs = []
     for record in manifest.to_dict(orient="records"):
         if args.arm == "leaky":
-            # 오프셋이 얼마든 주입 시점이 창 안(onset+0.10)에 오도록 맞춘다.
+            # 주입 시점 = note_onset - LEAK_LANDS_BEFORE_ONSET_S.
+            # CC 사건은 note_onset + branch_offset 에 있으므로 그만큼 당긴다.
             offset = float(record.get("branch_offset_s") or 0.0)
-            leak = max(0.0, offset - LEAK_LANDS_AFTER_ONSET_S)
+            leak = max(0.0, offset + LEAK_LANDS_BEFORE_ONSET_S)
         else:
             leak = 0.0
         jobs.append(
@@ -212,7 +218,7 @@ def command_render_reference(args: argparse.Namespace) -> None:
     _json_print({"arm": args.arm, "rows": len(frame), "leak_seconds": leaks,
                  "leak_lands_at_s": (
                      None if args.arm != "leaky"
-                     else f"onset+{LEAK_LANDS_AFTER_ONSET_S}"
+                     else f"onset-{LEAK_LANDS_BEFORE_ONSET_S}"
                  ),
                  "output": str(Path(args.output).resolve())})
 

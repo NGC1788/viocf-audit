@@ -416,8 +416,11 @@ def test_causal_reference_leaky_arm_actually_leaks(tmp_path):
     )
 
 
-@pytest.mark.parametrize("branch_offset", [0.25, 1.00, 3.00])
-def test_negative_control_lands_inside_measurement_window(tmp_path, branch_offset):
+@pytest.mark.parametrize("branch_offset", [0.25, 3.00])
+@pytest.mark.parametrize("technique", ["sustain", "pizzicato"])
+def test_negative_control_lands_inside_measurement_window(
+    tmp_path, branch_offset, technique
+):
     """음성 대조의 누출은 **모든 분기 오프셋에서** 측정 창 안에 떨어져야 한다.
 
     처음엔 "0.6 초 미리 당긴다"는 고정값을 썼다. 측정 창은
@@ -425,27 +428,32 @@ def test_negative_control_lands_inside_measurement_window(tmp_path, branch_offse
     분기가 멀면 당겨도 여전히 창 뒤에 떨어졌다.
 
     전수 실행에서 정확히 그 비율이 나왔다 — 960 그룹 중 576 이 '동일'
-    (= 5개 오프셋 중 창에 닿지 않는 3개 × 192). 파이프라인이 못 잡은 게 아니라
-    **창 안에 넣은 게 없었다.** 대조가 틀렸던 것이다.
+    (= 5개 오프셋 중 창에 닿지 않는 3개 × 192).
 
-    이제 클립마다 `branch_offset - LEAK_LANDS_AFTER_ONSET_S` 만큼 당겨서
-    주입 시점이 항상 onset+0.10 이 된다.
+    2차로 onset+0.10 에 떨어뜨리게 고쳤더니 이번엔 오프셋마다 **정확히 절반**
+    (96/192) 이 '동일' 이었다. 192 = 6주법 × 32반복 이므로 96 = 3주법 —
+    줄이 풀리는 주법이다. 그 주법들은 **음 시작 시점의 CC1 로 감쇠가 정해지고
+    이후 변화에 반응하지 않으므로**(의도한 물리다) 음이 시작된 뒤에 주입하면
+    아무 일도 일어나지 않는다.
+
+    그래서 **음 시작 앞**(onset − 0.05)에 떨어뜨린다. 그러면 활 주법은 창이
+    바뀌고, 감쇠 주법은 튕김 자체가 바뀐다. 두 부류를 모두 검사한다.
     """
     import numpy as np
 
     from viocf.causal_reference import render
-    from viocf.cli import LEAK_LANDS_AFTER_ONSET_S
+    from viocf.cli import LEAK_LANDS_BEFORE_ONSET_S
     from viocf.midi import CCEvent, NoteEvent, write_violet_midi
 
     rate = 24000
     onset = 0.75
     window = (onset + 0.04, onset + 0.23)   # features 의 분기 전 창과 같아야 한다
-    leak = max(0.0, branch_offset - LEAK_LANDS_AFTER_ONSET_S)
+    leak = max(0.0, branch_offset + LEAK_LANDS_BEFORE_ONSET_S)
 
     def render_pair(leak_seconds: float) -> float:
         waves = {}
         for label, final_cc in (("p", 32), ("f", 96)):
-            path = tmp_path / f"{label}_{branch_offset}_{leak_seconds}.mid"
+            path = tmp_path / f"{label}_{technique}_{branch_offset}_{leak_seconds}.mid"
             write_violet_midi(
                 path,
                 (NoteEvent(69, onset, 6.0),),
@@ -458,16 +466,16 @@ def test_negative_control_lands_inside_measurement_window(tmp_path, branch_offse
                 120,
             )
             waves[label] = render(
-                path, "sustain", sample_rate=rate, clip_seconds=10.0,
+                path, technique, sample_rate=rate, clip_seconds=10.0,
                 seed=5, leak_seconds=leak_seconds,
             )
         start, stop = int(window[0] * rate), int(window[1] * rate)
         return float(np.abs(waves["p"][start:stop] - waves["f"][start:stop]).max())
 
     assert render_pair(0.0) == 0.0, (
-        f"오프셋 {branch_offset}s: 인과적 렌더인데 분기 전 창이 다르다"
+        f"{technique} / 오프셋 {branch_offset}s: 인과적 렌더인데 분기 전 창이 다르다"
     )
     assert render_pair(leak) > 1e-4, (
-        f"오프셋 {branch_offset}s: 주입한 누출이 창 밖에 떨어졌다 "
+        f"{technique} / 오프셋 {branch_offset}s: 주입한 누출이 창에 닿지 않았다 "
         f"(당김 {leak:.2f}s). 음성 대조가 성립하지 않는다"
     )
