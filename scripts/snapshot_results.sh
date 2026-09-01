@@ -53,6 +53,16 @@ done < <(
   \) 2>/dev/null | sort
 )
 
+# 재개 상태 파일도 넣는다. 몇 KB 인데 이게 없으면 **완료한 조각을 다시 돌린다** —
+# 지연 확장 18조각(GPU 10시간), 본체 25청크(GPU 23시간)의 진행 기록이다.
+# 오디오 자체(40 GB)는 재생성 가능하지만 '어디까지 했나'는 여기에만 있다.
+for VIOCF_STATE in logs/queue_state.tsv logs/chunk_state_*.tsv logs/delayed_sweep_state.tsv; do
+  [[ -f "${VIOCF_STATE}" ]] || continue
+  mkdir -p "${VIOCF_DEST}/state"
+  cp -p "${VIOCF_STATE}" "${VIOCF_DEST}/state/$(basename "${VIOCF_STATE}")"
+  VIOCF_COPIED=$((VIOCF_COPIED + 1))
+done
+
 # 크기를 확인한다. 저장소를 부풀리면 이 장치의 취지가 무너진다.
 VIOCF_SIZE_KB="$(du -sk "${VIOCF_DEST}" | cut -f1)"
 echo "스냅샷 ${VIOCF_COPIED}개 파일, ${VIOCF_SIZE_KB} KB -> docs/results_snapshot/"
