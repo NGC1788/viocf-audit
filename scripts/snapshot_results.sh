@@ -16,6 +16,12 @@ set -euo pipefail
 VIOCF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIOCF_DEST="${VIOCF_ROOT}/docs/results_snapshot"
 cd "${VIOCF_ROOT}"
+
+# ⚠ 매번 새로 만든다. 이어 붙이면 안 된다.
+# 대상 목록을 좁힌 뒤에도 **이전 실행이 복사해 둔 파일이 남아** 크기 검사에
+# 걸렸다(40개만 복사했는데 24 MB 로 나왔다 — 옛 69개의 잔해가 같이 세어졌다).
+# 이 디렉터리는 results/ 에서 파생되는 것이므로 통째로 다시 만드는 게 맞다.
+rm -rf "${VIOCF_DEST}"
 mkdir -p "${VIOCF_DEST}"
 
 # 파일 하나당 상한. 이름만으로 고르면 '요약'이라는 이름의 큰 파일이 섞인다 —
