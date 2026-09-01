@@ -445,9 +445,22 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
             max(notated_onset + 0.05, notated_branch - 0.02),
         )
         pre_abs_spectral = _spectral_features(pre_abs, sample_rate)
+        # 분기 **후** 창도 악보 시각 기준으로 잰다.
+        # 왜: 누출 크기만 보면 "유도를 끄면 누출이 0" 같은 결과를 잘못 읽는다.
+        # 유도를 끄면 제어가 아무 일도 안 해서 샐 것도 없는 것이지 인과적이 된 게
+        # 아니다. **분기 후 효과로 나눠야** 그 둘이 갈린다.
+        # 창 위치는 실제 분기점을 따라간다(여긴 고정할 이유가 없다 — 분기 이후를
+        # 보는 게 목적이므로).
+        post_branch = notated_onset + (
+            branch_offset if np.isfinite(branch_offset) else REFERENCE_BRANCH_OFFSET_S
+        )
+        post_abs = _segment(samples, sample_rate, post_branch + 0.04, post_branch + 1.04)
+        post_abs_spectral = _spectral_features(post_abs, sample_rate)
         row.update({
             "prebranch_abs_rms_dbfs": float(amplitude_to_db(rms(pre_abs))),
             "prebranch_abs_centroid_hz": pre_abs_spectral["spectral_centroid_hz"],
+            "postbranch_abs_rms_dbfs": float(amplitude_to_db(rms(post_abs))),
+            "postbranch_abs_centroid_hz": post_abs_spectral["spectral_centroid_hz"],
             "notated_branch_time_s": notated_branch,
             "prebranch_window_s": float(window_offset),
             # 이 창이 실제 분기점을 가리키는가, 아니면 비교용 기준 창인가.
@@ -457,6 +470,8 @@ def extract_features(path: str | Path, metadata: dict[str, Any], config: dict[st
         row.update({
             "prebranch_abs_rms_dbfs": math.nan,
             "prebranch_abs_centroid_hz": math.nan,
+            "postbranch_abs_rms_dbfs": math.nan,
+            "postbranch_abs_centroid_hz": math.nan,
             "notated_branch_time_s": math.nan,
             "prebranch_window_is_branch": False,
         })

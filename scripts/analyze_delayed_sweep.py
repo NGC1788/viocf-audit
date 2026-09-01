@@ -41,6 +41,7 @@ import pandas as pd
 
 FEATURE = "prebranch_abs_rms_dbfs"
 CENTROID = "prebranch_abs_centroid_hz"
+POST = "postbranch_abs_rms_dbfs"
 
 
 def group_spreads(frame: pd.DataFrame) -> pd.DataFrame:
@@ -49,11 +50,12 @@ def group_spreads(frame: pd.DataFrame) -> pd.DataFrame:
     keys = [key for key in keys if key in frame.columns]
     records: list[dict] = []
     for key, group in frame.groupby(keys, dropna=False):
-        cells = group.groupby("dynamic_label")[[FEATURE, CENTROID]].mean()
+        available = [c for c in (FEATURE, CENTROID, POST) if c in group.columns]
+        cells = group.groupby("dynamic_label")[available].mean()
         if len(cells) < 2:
             continue
         row = dict(zip(keys, key if isinstance(key, tuple) else (key,)))
-        for feature in (FEATURE, CENTROID):
+        for feature in available:
             values = pd.to_numeric(cells[feature], errors="coerce").dropna().to_numpy()
             row[f"spread_{feature}"] = float(np.ptp(values)) if values.size >= 2 else np.nan
         records.append(row)
@@ -150,22 +152,54 @@ def main() -> int:
     print("=" * 78)
     print("3. CC 유도 강도 — 손잡이를 세게 돌리면 나아지나 나빠지나")
     print("=" * 78)
-    by_cc = spreads.groupby("w_cc")[key].agg(["median", "mean", "size"])
+    post_key = f"spread_{POST}"
+    columns = ["median", "mean", "size"]
+    by_cc = spreads.groupby("w_cc")[key].agg(columns)
+    if post_key in spreads.columns:
+        by_cc["분기후"] = spreads.groupby("w_cc")[post_key].median()
+        # ⚠ 누출 크기만 보면 안 된다.
+        # w_cc=0 은 CC 조건을 아예 안 쓰는 설정이라 p/mf/f 가 분기 전이든 후든
+        # 전부 같아진다. 그때의 '누출 0' 은 인과적이 된 게 아니라 **제어가 아무
+        # 일도 안 해서 샐 것이 없는 것**이다. 분기 후 효과로 나눠야 둘이 갈린다.
+        by_cc["누출비"] = (by_cc["median"] / by_cc["분기후"]).where(
+            by_cc["분기후"] > 1e-9
+        )
     print(by_cc.round(3).to_string())
     levels = sorted(spreads["w_cc"].dropna().unique())
-    if len(levels) >= 2:
-        low = float(by_cc.loc[levels[0], "median"])
-        high = float(by_cc.loc[levels[-1], "median"])
+
+    if post_key in spreads.columns:
         print()
-        print(f"  w_cc {levels[0]:g} -> {levels[-1]:g}: {low:.3f} -> {high:.3f} dB")
-        if high > low * 1.2:
-            print("  -> 유도를 세게 줄수록 **더 샌다.** 조건이 창 전체에 더 강하게")
-            print("     박히기 때문이다. 손잡이를 세게 돌릴수록 덜 인과적이 된다.")
-        elif high < low * 0.8:
-            print("  -> 유도를 세게 주면 누출이 준다. '유도가 약해서'라는 반론에")
-            print("     일부 근거가 있다. 기본값에서의 결론은 유지하되 함께 보고할 것.")
-        else:
-            print("  -> 유도 강도와 거의 무관하다. 설정이 아니라 구조의 문제다.")
+        print("  ⚠ 누출 크기만으로 판단하지 않는다. w_cc=0 은 CC 조건을 쓰지 않는")
+        print("     설정이라 분기 후에도 아무 차이가 없다 — 그때의 '누출 0' 은")
+        print("     인과적이 된 게 아니라 제어가 작동하지 않은 것이다.")
+        inert = by_cc.loc[by_cc["분기후"] <= 1e-9]
+        for level in inert.index:
+            print(f"     w_cc {level:g}: 분기 후 효과도 0 -> **제어 자체가 무력하다**"
+                  " (누출 판정 제외)")
+        active = by_cc.loc[by_cc["분기후"] > 1e-9]
+        if len(active) >= 2:
+            first, last = active.index[0], active.index[-1]
+            low, high = float(active.loc[first, "누출비"]), float(active.loc[last, "누출비"])
+            print()
+            print("  제어가 실제로 작동하는 구간에서 누출비:")
+            print(f"     w_cc {first:g} -> {last:g}:  {low:.3f} -> {high:.3f}")
+            if high > low * 1.2:
+                print("  -> 유도를 세게 줄수록 **비율로도 더 샌다.** 크기가 같이")
+                print("     커진 게 아니라 과거로 새는 몫이 늘어난다.")
+                print("     손잡이를 세게 돌릴수록 덜 인과적이 된다.")
+            elif high < low * 0.8:
+                print("  -> 유도를 세게 주면 비율이 준다. '유도가 약해서'라는 반론에")
+                print("     일부 근거가 있다. 기본값 결론은 유지하되 함께 보고할 것.")
+            else:
+                print("  -> 비율은 거의 일정하다. 유도는 누출과 효과를 같은 비로")
+                print("     키운다 — 설정이 아니라 구조의 문제다.")
+        elif len(active) == 1:
+            print()
+            print("  ⚠ 제어가 작동하는 w_cc 가 하나뿐이라 추세를 말할 수 없다.")
+    elif len(levels) >= 2:
+        print()
+        print("  ⚠ postbranch_abs_rms_dbfs 열이 없다. 특징 추출을 다시 돌려야")
+        print("     '유도를 끄면 누출이 0' 을 올바르게 해석할 수 있다.")
 
     output = root / "results" / "delayed_sweep_spreads.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
