@@ -223,6 +223,24 @@ def command_render_reference(args: argparse.Namespace) -> None:
                  "output": str(Path(args.output).resolve())})
 
 
+def command_make_temporal_control(args: argparse.Namespace) -> None:
+    from .temporal_control import create_temporal_control, plan_size, trajectory_table
+
+    config, _ = _config_and_root(args.config)
+    manifest = create_temporal_control(config, replicates=args.replicates)
+    table = trajectory_table()
+    # 평균이 어긋나면 시험 자체가 성립하지 않는다. 여기서 막는다.
+    means = table["mean"].round(6).unique()
+    if len(means) != 1:
+        raise SystemExit(f"궤적 평균이 서로 다르다: {table.to_dict('records')}")
+    _json_print({
+        "plan": plan_size(args.replicates),
+        "trajectory_mean": float(means[0]),
+        "trajectories": table.to_dict("records"),
+        "manifest": str(manifest),
+    })
+
+
 def command_make_config_robustness(args: argparse.Namespace) -> None:
     from .delayed_sweep import config_plan_size, create_config_robustness
 
@@ -393,6 +411,14 @@ def build_parser() -> argparse.ArgumentParser:
     reference.add_argument("--output", required=True)
     reference.add_argument("--workers", type=int, default=None)
     reference.set_defaults(func=command_render_reference)
+
+    temporal = subparsers.add_parser(
+        "make-temporal-control",
+        help="시간 제어 시험 (평균 같고 모양 다른 CC1 궤적 6종)",
+    )
+    temporal.add_argument("--config", default="configs/experiment.yaml")
+    temporal.add_argument("--replicates", type=int, default=32)
+    temporal.set_defaults(func=command_make_temporal_control)
 
     config_rob = subparsers.add_parser(
         "make-config-robustness",
