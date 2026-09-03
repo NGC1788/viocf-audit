@@ -223,6 +223,15 @@ def command_render_reference(args: argparse.Namespace) -> None:
                  "output": str(Path(args.output).resolve())})
 
 
+def command_make_config_robustness(args: argparse.Namespace) -> None:
+    from .delayed_sweep import config_plan_size, create_config_robustness
+
+    config, _ = _config_and_root(args.config)
+    plan = config_plan_size(args.replicates)
+    outputs = create_config_robustness(config, replicates=args.replicates)
+    _json_print({"plan": plan, "manifests": {k: str(v) for k, v in outputs.items()}})
+
+
 def command_make_delayed_sweep(args: argparse.Namespace) -> None:
     from .delayed_sweep import create_delayed_sweep, plan_size
 
@@ -384,6 +393,14 @@ def build_parser() -> argparse.ArgumentParser:
     reference.add_argument("--output", required=True)
     reference.add_argument("--workers", type=int, default=None)
     reference.set_defaults(func=command_render_reference)
+
+    config_rob = subparsers.add_parser(
+        "make-config-robustness",
+        help="설정 강건성 설계 (w_cc 5점 x sampling_steps 4점)",
+    )
+    config_rob.add_argument("--config", default="configs/experiment.yaml")
+    config_rob.add_argument("--replicates", type=int, default=32)
+    config_rob.set_defaults(func=command_make_config_robustness)
 
     delayed_sweep = subparsers.add_parser(
         "make-delayed-sweep",

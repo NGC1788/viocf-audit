@@ -179,3 +179,143 @@ def create_delayed_sweep(
         pd.DataFrame(rows).to_csv(manifest, index=False)
         outputs[tag] = manifest
     return outputs
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 설정 강건성 — "설정을 바꾸면 누출이 사라지나"
+# ─────────────────────────────────────────────────────────────────────────
+#
+# 개정 31 에서 두 가지가 약점으로 남았다.
+#
+#   1. w_cc 누출비 0.104 -> 0.203 이 **점 두 개짜리 추세**다.
+#      "손잡이를 세게 돌릴수록 덜 인과적" 은 지금 결과 중 가장 인상적인데
+#      근거가 가장 약하다.
+#   2. sampling_steps 를 30 으로 고정하고 한 번도 안 흔들었다.
+#      "샘플링이 부족해서 아니냐" 는 반론이 그대로 열려 있다.
+#
+# 둘을 채우면 "설정 어디를 만져도 안 없어진다" 가 되고, 그게 구조적 문제라는
+# 주장의 최종 형태다.
+#
+# 격자를 줄인다. 축 하나당 점을 늘리는 게 목적이므로 나머지는 양 끝만 남긴다.
+#   주법 4개  = 활이 완전히 떨어지는 쪽 2개 + 계속 닿는 쪽 2개 (개정 31 의 순서 양끝)
+#   오프셋 2개 = 가장 가까운 것과 먼 편 하나
+# w_cc 는 기존 1.0/2.0 도 **다시 돌린다** — 격자가 달라지면 비교가 성립하지 않는다.
+
+CONFIG_TECHNIQUES = ("pizzicato", "spiccato", "sustain", "tremolo")
+CONFIG_OFFSETS_S = (0.25, 1.75)
+CONFIG_CC_LEVELS = (0.5, 1.0, 2.0, 3.0, 4.0)
+# steps 는 w_cc 를 기본값에 고정하고 따로 훑는다(둘을 곱하면 격자가 폭발한다).
+CONFIG_STEPS_LEVELS = (10, 30, 60, 120)
+CONFIG_STEPS_AT_CC = 1.0
+
+
+def config_plan_size(replicates: int) -> dict[str, int]:
+    cell = len(CONFIG_TECHNIQUES) * 3 * len(CONFIG_OFFSETS_S) * replicates
+    cc_clips = cell * len(CONFIG_CC_LEVELS)
+    steps_clips = cell * len(CONFIG_STEPS_LEVELS)
+    return {
+        "clips_per_cell": cell,
+        "cc_levels": len(CONFIG_CC_LEVELS),
+        "steps_levels": len(CONFIG_STEPS_LEVELS),
+        "cc_clips": cc_clips,
+        "steps_clips": steps_clips,
+        "clips_total": cc_clips + steps_clips,
+    }
+
+
+def create_config_robustness(
+    config: ExperimentConfig,
+    replicates: int = 32,
+    profile: str = "config_robustness",
+) -> dict[str, Path]:
+    """(w_cc, sampling_steps) 마다 manifest 를 하나씩 쓴다."""
+    root = project_root_from_config(config)
+    base_seed = int(config.raw["model"]["base_seed"])
+    keyswitches = dict(config.techniques)
+    default_steps = int(config.raw["model"]["sampling_steps"])
+    default_w_tech = float(config.raw["model"]["w_tech"])
+
+    prompt = Prompt(
+        prompt_id="delayed_A4",
+        pattern="delayed_long",
+        register="mid",
+        notes=(NoteEvent(69, config.note_onset_seconds, 6.0),),
+        reference_midi=69,
+        single_pitch=True,
+    )
+
+    # (태그, w_cc, steps) 목록. w_cc 축은 steps 를 기본값에, steps 축은 w_cc 를
+    # CONFIG_STEPS_AT_CC 에 고정한다. 겹치는 조합은 한 번만 만든다.
+    arms: list[tuple[str, float, int]] = []
+    for w_cc in CONFIG_CC_LEVELS:
+        arms.append((f"cc{_weight_tag(w_cc)[2:]}_n{default_steps:03d}", w_cc, default_steps))
+    for steps in CONFIG_STEPS_LEVELS:
+        tag = f"cc{_weight_tag(CONFIG_STEPS_AT_CC)[2:]}_n{steps:03d}"
+        if all(tag != existing for existing, _, _ in arms):
+            arms.append((tag, CONFIG_STEPS_AT_CC, steps))
+
+    manifest_dir = root / "manifests" / profile
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    outputs: dict[str, Path] = {}
+
+    for tag, w_cc, steps in arms:
+        rows: list[dict[str, Any]] = []
+        midi_dir = root / "data" / "midi" / profile / tag
+        for technique in CONFIG_TECHNIQUES:
+            keyswitch = keyswitches[technique]
+            released = technique in RELEASED_TECHNIQUES
+            for branch_offset in CONFIG_OFFSETS_S:
+                for dynamic_label, final_cc in config.dynamics.items():
+                    cc_events = _delayed_cc(config, final_cc, branch_offset)
+                    for replicate in range(1, replicates + 1):
+                        noise_group = (
+                            f"{prompt.prompt_id}-{tag}"
+                            f"-off{int(branch_offset * 100):04d}"
+                            f"-{technique}-rep{replicate:02d}"
+                        )
+                        seed = stable_group_seed(base_seed, noise_group)
+                        clip_id = _model_clip_id(
+                            prompt.prompt_id, technique, dynamic_label, replicate,
+                            profile=f"{tag}_off{int(branch_offset * 100):04d}",
+                        )
+                        midi_path = midi_dir / f"{clip_id}.mid"
+                        write_violet_midi(
+                            midi_path, prompt.notes, keyswitch, cc_events,
+                            config.tempo_bpm,
+                        )
+                        rows.append({
+                            "clip_id": clip_id,
+                            "source": "model",
+                            "model": "VIOLET",
+                            "profile": "delayed",
+                            "sweep_kind": "config_robustness",
+                            "prompt_id": prompt.prompt_id,
+                            "pattern": prompt.pattern,
+                            "register": prompt.register,
+                            "technique": technique,
+                            "technique_class": "released" if released else "sustained",
+                            "technique_keyswitch": keyswitch,
+                            "dynamic_label": dynamic_label,
+                            "cc1_initial": 64,
+                            "cc1_final": final_cc,
+                            "branch_offset_s": branch_offset,
+                            "note_onset_s": config.note_onset_seconds,
+                            "seed": seed,
+                            "base_seed": base_seed,
+                            "noise_group": noise_group,
+                            "replicate": replicate,
+                            "w_tech": default_w_tech,
+                            "w_cc": w_cc,
+                            "sampling_steps": steps,
+                            "midi_path": _relative(midi_path, root),
+                            "audio_path": _relative(
+                                root / "data" / "model_audio" / profile / tag
+                                / f"{clip_id}.wav",
+                                root,
+                            ),
+                            "analysis_tier": "generator_only_exploratory",
+                        })
+        manifest = manifest_dir / f"{tag}.csv"
+        pd.DataFrame(rows).to_csv(manifest, index=False)
+        outputs[tag] = manifest
+    return outputs
