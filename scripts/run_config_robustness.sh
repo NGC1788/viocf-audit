@@ -15,10 +15,10 @@
 #
 # w_cc 와 steps 는 샘플러 설정이라 조합마다 별도 실행이 필요하다.
 #
-# 재개 가능: logs/delayed_sweep_state.tsv 에 완료한 (w_cc, 주법) 조각을 남긴다.
+# 재개 가능: logs/config_robustness_state.tsv 에 완료한 (설정, 주법) 조각을 남긴다.
 # 오프셋·강약·반복은 한 조각 안에서 함께 돌아간다.
 #
-# 사용: scripts/run_delayed_sweep.sh [replicates]
+# 사용: scripts/run_config_robustness.sh [replicates]
 set -euo pipefail
 
 VIOCF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,7 +49,11 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 manifest_dir = root / "manifests" / "config_robustness"
-for manifest in sorted(manifest_dir.glob("wc*.csv")):
+# ⚠ 이 스크립트는 run_delayed_sweep.sh 에서 파생됐다. 거기서는 manifest 이름이
+# wc0p0.csv 였지만 여기서는 cc0p5_n030.csv 처럼 (w_cc, steps) 조합 이름이다.
+# glob 을 안 고쳐서 하나도 못 찾고, 빈 결과에 grep -c 가 1 을 반환해
+# set -e 로 죽었다. 파생 스크립트는 이런 잔재를 반드시 훑을 것.
+for manifest in sorted(manifest_dir.glob("*.csv")):
     tag = manifest.stem
     with manifest.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
@@ -77,7 +81,13 @@ for manifest in sorted(manifest_dir.glob("wc*.csv")):
 PY
 )"
 
-VIOCF_TOTAL="$(printf '%s\n' "${VIOCF_PLAN}" | grep -c .)"
+VIOCF_TOTAL="$(printf '%s\n' "${VIOCF_PLAN}" | grep -c . || true)"
+if [[ "${VIOCF_TOTAL}" -eq 0 ]]; then
+  echo "조각 계획이 비었다. manifests/${VIOCF_PROFILE}/ 에 CSV 가 있는지,"
+  echo "그리고 위 python 의 glob 이 그 이름과 맞는지 확인할 것."
+  ls -l "${VIOCF_ROOT}/manifests/${VIOCF_PROFILE}/" 2>&1 | head
+  exit 2
+fi
 echo
 echo "조각 ${VIOCF_TOTAL}개 (w_cc 태그 x 주법)"
 echo
@@ -157,7 +167,7 @@ PY
   viocf collect-violet \
     --run-dir "${VIOCF_RUN_DIR}" \
     --manifest "${VIOCF_STAGE}.manifest.csv" \
-    --output "${VIOCF_ROOT}/results/collect_delayed_sweep_${VIOCF_KEY}.csv"
+    --output "${VIOCF_ROOT}/results/collect_config_robustness_${VIOCF_KEY}.csv"
 
   VIOCF_ELAPSED=$(( $(date +%s) - VIOCF_STARTED ))
   printf '%s\tdone\t%s\t%ss\t%s clips\n' \
