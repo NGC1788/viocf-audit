@@ -114,11 +114,28 @@ def main() -> int:
         print(f"  가장 먼 분기     {table.index[-1]:.2f}s: {far:.3f} dB")
         if near > 1e-9:
             print(f"  먼 쪽 / 가까운 쪽 = {far / near:.3f}")
-            if far / near > 0.5:
-                print("  -> 거리가 멀어져도 거의 줄지 않는다. 조건이 창 전체에 박힌다.")
-                print("     '3 초 뒤에 일어날 일이 지금 소리에 이미 들어 있다.'")
-            else:
-                print("  -> 거리에 따라 줄어든다. 의존이 국소적이다.")
+
+        # ⚠ 감쇠하느냐 평평하냐는 **부차적인 질문**이다.
+        # 인과적 생성기는 어떤 거리에서도 정확히 0 이다. 우리는 그 0 을 실제로
+        # 확인했다 — 인과 기준 렌더러에서 960/960 그룹, 중앙 spread 0.00000000 dB
+        # (개정 28). 그러니 먼 거리에서도 0 이 아니면 그 자체로 결론이 선다.
+        # 감쇠 여부는 '얼마나 국소적인가'를 말할 뿐 '인과적인가'를 바꾸지 않는다.
+        print()
+        farthest = table.iloc[-1]
+        nonzero = farthest.loc[farthest > 1e-9]
+        if len(nonzero):
+            print(f"  ⭐ 가장 먼 분기({table.index[-1]:.2f}s)에서도 0 이 아니다: "
+                  + ", ".join(f"w_cc {c:g} → {v:.3f} dB" for c, v in nonzero.items()))
+            print("     인과 기준 렌더러는 같은 파이프라인에서 정확히 0.00000000 을")
+            print("     냈다(960/960). 따라서 이 값은 측정 잡음이 아니다.")
+            print(f"     -> {table.index[-1]:.2f} 초 뒤에 적용될 조건이 지금 소리에")
+            print("        이미 반영돼 있다.")
+        else:
+            print("  가장 먼 분기에서는 0 이다 — 의존이 그 거리 안에서 끝난다.")
+        if near > 1e-9 and far / near < 0.5:
+            print()
+            print("  거리에 따라 단조 감소한다. 이건 약점이 아니라 강점이다 —")
+            print("  평평한 값 하나보다 **용량-반응 곡선**이 기제의 존재를 더 잘 보인다.")
 
     print()
     print("=" * 78)
@@ -135,6 +152,22 @@ def main() -> int:
         )
         print("주법별 (부류 안에서 반복되는지 — 한 주법이 끌고 가면 안 된다)")
         print(per_technique.round(3).to_string())
+        # ⚠ 부류 경계가 겹치는지 반드시 확인한다.
+        # released/sustained 는 '활이 줄에서 떨어지는가'로 나눈 이분법인데, 실제
+        # 물리는 연속적이다. staccato 는 짧게 끊어도 **활이 줄에 닿아 있다** —
+        # 튕겨서 완전히 떨어지는 pizzicato 나 튀는 spiccato 와는 다르다.
+        # 부류 안 최솟값이 다른 부류 최댓값보다 작으면 그 사실을 드러내야 한다.
+        flat = per_technique["median"].reset_index()
+        rel = flat.loc[flat["technique_class"].eq("released"), "median"]
+        sus = flat.loc[flat["technique_class"].eq("sustained"), "median"]
+        if len(rel) and len(sus) and rel.min() < sus.max():
+            crossing = flat.loc[
+                flat["technique_class"].eq("released") & flat["median"].lt(sus.max())
+            ]["technique"].tolist()
+            print()
+            print(f"  ⚠ 부류가 겹친다: {', '.join(crossing)} 이(가) sustained 범위 안에 있다.")
+            print("     이분법이 거친 것이다 — 활이 줄에 닿는 정도는 연속적이다.")
+            print("     순서 자체를 보라. 활이 줄에서 떨어지는 정도와 일치하는가?")
         if {"released", "sustained"}.issubset(set(spreads["technique_class"])):
             released = spreads.loc[spreads["technique_class"].eq("released"), key]
             sustained = spreads.loc[spreads["technique_class"].eq("sustained"), key]
