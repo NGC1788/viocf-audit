@@ -31,6 +31,18 @@ src/*.egg-info/
 # 재생성이 **바이트 단위로 동일**함을 확인했다(stable_group_seed 가 blake2b 기반이라
 # 프로세스·머신과 무관하게 결정적이다). 서버에서는 clone 후 위 두 명령으로 만든다.
 data/midi/
+
+# 스윕 manifest 도 추적하지 않는다.
+#
+# 러너가 첫 단계에서 `viocf make-*` 로 항상 다시 만들고, 시드가 blake2b 기반이라
+# 재생성이 결정적이다 — data/midi/ 와 같은 이유다.
+#
+# 추적했더니 두 번 사고가 났다:
+#   1. 동작 확인용 --replicates 2 산출물이 커밋돼 설계와 다른 파일이 남았다
+#   2. 서버가 실제 규모로 다시 만들면 '변경됨' 이 되어 git pull 이 막힌다
+# 게다가 6 MB x 여러 벌이라 저장소가 부푼다(pull 이 115 MiB 였던 적이 있다).
+manifests/delayed_sweep/
+manifests/config_robustness/
 .DS_Store
 **/.DS_Store
 .venv-check/
